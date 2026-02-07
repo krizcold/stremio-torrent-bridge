@@ -26,7 +26,7 @@ services:
 
   # Bridge Service (Addon Wrapper + Router)
   bridge:
-    image: ghcr.io/krizcold/stremio-torrent-bridge:0.1.2
+    image: ghcr.io/krizcold/stremio-torrent-bridge:latest
     container_name: stremio-bridge
     restart: unless-stopped
     cpu_shares: 80
