@@ -35,7 +35,7 @@ services:
       - 8080
     environment:
       TORRENT_ENGINE: "${TORRENT_ENGINE:-torrserver}"
-      BRIDGE_EXTERNAL_URL: "https://stremiobridge.${PCS_DOMAIN}"
+      BRIDGE_EXTERNAL_URL: "https://stremiotorrentbridge-${PCS_DOMAIN}"
       TORRSERVER_URL: "http://torrserver:8090"
       RQBIT_URL: "http://rqbit:3030"
       QBITTORRENT_URL: "http://qbittorrent:8080"
