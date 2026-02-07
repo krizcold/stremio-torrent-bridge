@@ -149,7 +149,7 @@ x-casaos:
   title:
     en_us: "Stremio Torrent Bridge"
   is_uncontrolled: false
-  index: /
+  index: /?hash=$AUTH_HASH
   port_map: "80"
   tips:
     before_install:
