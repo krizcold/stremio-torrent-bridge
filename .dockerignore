@@ -1,0 +1,7 @@
+SPECIFICATION.md
+*.md
+.git
+.gitignore
+.env
+docker-compose.yml
+dockflow.json

@@ -1,0 +1,565 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: #1a1a2e;
+    color: #eee;
+    line-height: 1.6;
+    padding: 20px;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+header {
+    text-align: center;
+    margin-bottom: 40px;
+    padding-bottom: 20px;
+    border-bottom: 2px solid #0f3460;
+}
+
+h1 {
+    font-size: 2.5rem;
+    margin-bottom: 10px;
+    color: #fff;
+}
+
+.subtitle {
+    color: #aaa;
+    font-size: 0.95rem;
+}
+
+h2 {
+    font-size: 1.3rem;
+    margin-bottom: 15px;
+    color: #fff;
+}
+
+.card {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 8px;
+    padding: 25px;
+    margin-bottom: 25px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* Section header with inline refresh button */
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.section-header h2 {
+    margin-bottom: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Forms
+--------------------------------------------------------------------------- */
+
+.form-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.form-row input {
+    flex: 1;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: #aaa;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+input[type="text"],
+input[type="number"],
+select {
+    width: 100%;
+    padding: 12px 15px;
+    background: #0f3460;
+    border: 1px solid #1a4d7a;
+    border-radius: 6px;
+    color: #eee;
+    font-size: 0.95rem;
+    transition: border-color 0.2s, background-color 0.2s;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+select:focus {
+    outline: none;
+    border-color: #2b6ea8;
+    background: #133254;
+}
+
+input::placeholder {
+    color: #666;
+}
+
+/* ---------------------------------------------------------------------------
+   Buttons
+--------------------------------------------------------------------------- */
+
+button {
+    padding: 12px 24px;
+    background: #0f3460;
+    color: #eee;
+    border: 1px solid #1a4d7a;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.95rem;
+    font-weight: 500;
+    transition: background-color 0.2s, border-color 0.2s, opacity 0.2s;
+}
+
+button:hover {
+    background: #1a4d7a;
+    border-color: #2b6ea8;
+}
+
+button:active {
+    transform: translateY(1px);
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+button:disabled:hover {
+    background: #0f3460;
+    border-color: #1a4d7a;
+}
+
+button.danger {
+    background: #e94560;
+    border-color: #c73550;
+}
+
+button.danger:hover {
+    background: #d13a51;
+}
+
+button.danger:disabled:hover {
+    background: #e94560;
+    border-color: #c73550;
+}
+
+button.small {
+    padding: 6px 12px;
+    font-size: 0.85rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Engine Status
+--------------------------------------------------------------------------- */
+
+#engine-status {
+    padding: 15px;
+    background: #0f3460;
+    border-radius: 6px;
+    font-size: 0.9rem;
+}
+
+.engine-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.engine-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: #16213e;
+    border: 1px solid #1a4d7a;
+    border-radius: 6px;
+    transition: border-color 0.2s;
+}
+
+.engine-row.engine-active {
+    border-color: #4ec9b0;
+    background: #132e3e;
+}
+
+.engine-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 140px;
+}
+
+.active-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #4ec9b0;
+    background: rgba(78, 201, 176, 0.15);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-weight: 600;
+}
+
+.engine-url {
+    flex: 1;
+    color: #aaa;
+    font-family: "Courier New", monospace;
+    font-size: 0.85rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Status badges */
+.status-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+}
+
+.badge-online {
+    background: rgba(78, 201, 176, 0.2);
+    color: #4ec9b0;
+    border: 1px solid rgba(78, 201, 176, 0.4);
+}
+
+.badge-offline {
+    background: rgba(233, 69, 96, 0.2);
+    color: #e94560;
+    border: 1px solid rgba(233, 69, 96, 0.4);
+}
+
+.badge-unknown {
+    background: rgba(170, 170, 170, 0.15);
+    color: #999;
+    border: 1px solid rgba(170, 170, 170, 0.3);
+}
+
+/* ---------------------------------------------------------------------------
+   Addons
+--------------------------------------------------------------------------- */
+
+#addons-list {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.addon-item {
+    padding: 15px;
+    background: #0f3460;
+    border: 1px solid #1a4d7a;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.addon-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.addon-name {
+    font-weight: 600;
+    font-size: 1.1rem;
+}
+
+.addon-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.addon-url {
+    color: #aaa;
+    font-size: 0.85rem;
+    word-break: break-all;
+}
+
+.addon-wrapped {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 5px;
+}
+
+.addon-wrapped-label {
+    font-size: 0.85rem;
+    color: #aaa;
+    flex-shrink: 0;
+}
+
+.addon-wrapped-url {
+    flex: 1;
+    padding: 8px 12px;
+    background: #1a1a2e;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    font-family: "Courier New", monospace;
+    font-size: 0.85rem;
+    color: #4ec9b0;
+    word-break: break-all;
+}
+
+/* ---------------------------------------------------------------------------
+   Cache Stats
+--------------------------------------------------------------------------- */
+
+.cache-stats-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.cache-stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.cache-stat-label {
+    color: #aaa;
+    font-size: 0.9rem;
+}
+
+.cache-stat-value {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: #eee;
+}
+
+/* Progress bar */
+.progress-bar-container {
+    width: 100%;
+    height: 10px;
+    background: #0f3460;
+    border-radius: 5px;
+    overflow: hidden;
+    border: 1px solid #1a4d7a;
+}
+
+.progress-bar {
+    height: 100%;
+    background: #4ec9b0;
+    border-radius: 5px;
+    transition: width 0.4s ease;
+}
+
+.progress-bar.progress-warn {
+    background: #f0a500;
+}
+
+.progress-bar.progress-danger {
+    background: #e94560;
+}
+
+.cache-clean-btn {
+    margin-top: 4px;
+}
+
+/* ---------------------------------------------------------------------------
+   Torrents Table
+--------------------------------------------------------------------------- */
+
+.torrents-table-wrapper {
+    overflow-x: auto;
+}
+
+.torrents-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.torrents-table thead th {
+    text-align: left;
+    padding: 10px 12px;
+    background: #0f3460;
+    color: #aaa;
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 2px solid #1a4d7a;
+}
+
+.torrents-table tbody tr {
+    border-bottom: 1px solid #1a4d7a;
+    transition: background-color 0.15s;
+}
+
+.torrents-table tbody tr:hover {
+    background: rgba(15, 52, 96, 0.5);
+}
+
+.torrents-table tbody tr:last-child {
+    border-bottom: none;
+}
+
+.torrents-table td {
+    padding: 10px 12px;
+    vertical-align: middle;
+}
+
+.torrents-table td.nowrap {
+    white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   Messages & Feedback
+--------------------------------------------------------------------------- */
+
+.empty-state {
+    padding: 30px;
+    text-align: center;
+    color: #aaa;
+    font-style: italic;
+}
+
+.error {
+    color: #e94560;
+    font-size: 0.9rem;
+    margin-top: 10px;
+    display: none;
+}
+
+.error.visible {
+    display: block;
+}
+
+.status {
+    color: #4ec9b0;
+    font-size: 0.9rem;
+    margin-top: 10px;
+    display: none;
+}
+
+.status.visible {
+    display: block;
+    animation: fadeOut 3s forwards;
+}
+
+@keyframes fadeOut {
+    0%, 80% {
+        opacity: 1;
+    }
+    100% {
+        opacity: 0;
+    }
+}
+
+.copied-feedback {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: #4ec9b0;
+    color: #1a1a2e;
+    padding: 12px 20px;
+    border-radius: 6px;
+    font-weight: 600;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    animation: slideInOut 2s forwards;
+    z-index: 1000;
+}
+
+@keyframes slideInOut {
+    0% {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+    10%, 90% {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    100% {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+   Responsive
+--------------------------------------------------------------------------- */
+
+@media (max-width: 600px) {
+    body {
+        padding: 10px;
+    }
+
+    h1 {
+        font-size: 2rem;
+    }
+
+    .card {
+        padding: 20px;
+    }
+
+    .form-row {
+        flex-direction: column;
+    }
+
+    .addon-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .addon-wrapped {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .addon-wrapped-label {
+        margin-bottom: 5px;
+    }
+
+    .engine-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+    }
+
+    .engine-info {
+        min-width: auto;
+    }
+
+    .engine-url {
+        white-space: normal;
+        word-break: break-all;
+    }
+
+    .torrents-table {
+        font-size: 0.8rem;
+    }
+
+    .torrents-table td,
+    .torrents-table th {
+        padding: 8px 6px;
+    }
+}

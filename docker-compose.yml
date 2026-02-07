@@ -1,0 +1,167 @@
+name: stremiotorrentbridge
+
+services:
+# Web UI Proxy (nginx-hash-lock protection)
+  stremiotorrentbridge:
+    image: ghcr.io/yundera/nginx-hash-lock:latest
+    container_name: stremio-bridge-ui
+    hostname: stremiobridge
+    restart: unless-stopped
+    cpu_shares: 80
+    user: "root"
+    expose:
+      - 80
+    environment:
+      BACKEND_HOST: "bridge"
+      BACKEND_PORT: "8080"
+      LISTEN_PORT: "80"
+      AUTH_HASH: "$AUTH_HASH"
+    tmpfs:
+      - /var/cache/nginx:size=100M
+    depends_on:
+      - bridge
+    networks:
+      - pcs
+
+  # Bridge Service (Addon Wrapper + Router)
+  bridge:
+    image: ghcr.io/krizcold/stremio-torrent-bridge:0.1.0
+    container_name: stremio-bridge
+    restart: unless-stopped
+    cpu_shares: 80
+    user: "1000:1000"
+    expose:
+      - 8080
+    environment:
+      TORRENT_ENGINE: "${TORRENT_ENGINE:-torrserver}"
+      BRIDGE_EXTERNAL_URL: "https://stremiobridge.${PCS_DOMAIN}"
+      TORRSERVER_URL: "http://torrserver:8090"
+      RQBIT_URL: "http://rqbit:3030"
+      QBITTORRENT_URL: "http://qbittorrent:8080"
+      QBITTORRENT_DOWNLOAD_PATH: "/downloads"
+      QBITTORRENT_USERNAME: "admin"
+      QBITTORRENT_PASSWORD: "$PCS_DEFAULT_PASSWORD"
+      CACHE_SIZE_GB: "${CACHE_SIZE_GB:-60}"
+      CACHE_MAX_AGE_DAYS: "${CACHE_MAX_AGE_DAYS:-7}"
+      TZ: "$TZ"
+    volumes:
+      - /DATA/AppData/stremio-torrent-bridge/bridge:/data
+      - /DATA/AppData/stremio-torrent-bridge/qbittorrent/downloads:/downloads:ro
+    depends_on:
+      - torrserver
+    networks:
+      - internal
+      - pcs
+    x-casaos:
+      envs:
+        - container: TORRENT_ENGINE
+          description:
+            en_us: "Torrent engine to use: torrserver, rqbit, or qbittorrent"
+        - container: CACHE_SIZE_GB
+          description:
+            en_us: "Maximum cache size in gigabytes"
+        - container: CACHE_MAX_AGE_DAYS
+          description:
+            en_us: "Maximum days to keep unused cached torrents"
+      volumes:
+        - container: /data
+          description:
+            en_us: "Bridge configuration and addon data"
+
+  # Engine A: TorrServer
+  torrserver:
+    image: ghcr.io/yourok/torrserver:1.2.136
+    container_name: stremio-bridge-torrserver
+    restart: unless-stopped
+    cpu_shares: 50
+    environment:
+      TS_PORT: "8090"
+      TS_DONTKILL: "1"
+      TS_HTTPAUTH: "0"
+    volumes:
+      - /DATA/AppData/stremio-torrent-bridge/torrserver/config:/opt/ts/config
+      - /DATA/AppData/stremio-torrent-bridge/torrserver/cache:/opt/ts/torrents
+    networks:
+      - internal
+
+  # Engine B: rqbit
+  rqbit:
+    image: ikatson/rqbit:7.0.1
+    container_name: stremio-bridge-rqbit
+    restart: unless-stopped
+    cpu_shares: 50
+    command: server start /downloads
+    volumes:
+      - /DATA/AppData/stremio-torrent-bridge/rqbit/downloads:/downloads
+      - /DATA/AppData/stremio-torrent-bridge/rqbit/config:/root/.config/rqbit
+    networks:
+      - internal
+
+  # Engine C: qBittorrent
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:4.6.7
+    container_name: stremio-bridge-qbittorrent
+    restart: unless-stopped
+    cpu_shares: 50
+    environment:
+      PUID: "$PUID"
+      PGID: "$PGID"
+      TZ: "$TZ"
+      WEBUI_PORT: "8080"
+    volumes:
+      - /DATA/AppData/stremio-torrent-bridge/qbittorrent/config:/config
+      - /DATA/AppData/stremio-torrent-bridge/qbittorrent/downloads:/downloads
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+  pcs:
+    external: true
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: stremiotorrentbridge
+  author: kriz_cold
+  developer: kriz_cold
+  icon: https://cdn.jsdelivr.net/gh/Yundera/AppStore@main/Apps/stremio-torrent-bridge/icon.png
+  tagline:
+    en_us: "Full-peer torrent streaming for Stremio"
+  category: Entertainment
+  description:
+    en_us: |
+      Stremio Torrent Bridge wraps Stremio addons (like Torrentio) to provide
+      enhanced torrent streaming with full TCP/UDP peer connectivity, solving
+      Stremio's built-in WebRTC limitation that only connects to ~2% of peers.
+
+      Features:
+      - Wrap any Stremio addon for full peer connectivity
+      - Triple-engine: TorrServer (default), rqbit (low memory), qBittorrent (max speed)
+      - HTTP streaming with seek support (Range requests)
+      - Automatic LRU cache management
+      - Management UI for addon configuration
+
+      Default engine: TorrServer
+      Change via TORRENT_ENGINE environment variable on "bridge" service.
+  title:
+    en_us: "Stremio Torrent Bridge"
+  is_uncontrolled: false
+  index: /
+  port_map: "80"
+  tips:
+    before_install:
+      en_us: |
+        Access: `https://${REF_DOMAIN}/`
+
+        1. Open the Bridge UI
+        2. Paste a Stremio addon manifest URL (e.g., Torrentio)
+        3. Copy the wrapped URL and install it in Stremio
+        4. Enjoy full peer connectivity!
+
+        Change the torrent engine via TORRENT_ENGINE on the "bridge" service:
+        - `torrserver` (default) - Easy setup, IPv6 support
+        - `rqbit` - Low memory usage, great for Raspberry Pi
+        - `qbittorrent` - Maximum download speed, ISP throttle bypass

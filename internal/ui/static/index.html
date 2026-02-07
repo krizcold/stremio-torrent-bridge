@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Torrent Bridge</title>
+    <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Torrent Bridge</h1>
+            <p class="subtitle">Stremio addon wrapper for full peer connectivity</p>
+        </header>
+
+        <!-- Engine Status -->
+        <section class="card" id="status-section">
+            <h2>Engine Status</h2>
+            <div id="engine-status">Loading...</div>
+        </section>
+
+        <!-- Add Addon -->
+        <section class="card">
+            <h2>Add Addon</h2>
+            <div class="form-row">
+                <input type="text" id="addon-url" placeholder="Paste addon manifest URL (e.g., https://torrentio.strem.fun/manifest.json)" />
+                <button id="add-btn" onclick="addAddon()">Add</button>
+            </div>
+            <div id="add-error" class="error"></div>
+        </section>
+
+        <!-- Wrapped Addons List -->
+        <section class="card">
+            <h2>Wrapped Addons</h2>
+            <div id="addons-list">Loading...</div>
+        </section>
+
+        <!-- Settings -->
+        <section class="card">
+            <h2>Settings</h2>
+            <div class="form-group">
+                <label>Default Engine</label>
+                <select id="engine-select">
+                    <option value="torrserver">TorrServer</option>
+                    <option value="rqbit">rqbit</option>
+                    <option value="qbittorrent">qBittorrent</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Cache Size (GB)</label>
+                <input type="number" id="cache-size" min="1" max="1000" />
+            </div>
+            <div class="form-group">
+                <label>Cache Max Age (days)</label>
+                <input type="number" id="cache-age" min="1" max="365" />
+            </div>
+            <button id="save-config-btn" onclick="saveConfig()">Save Settings</button>
+            <div id="config-status" class="status"></div>
+        </section>
+
+        <!-- Cache Stats -->
+        <section class="card" id="cache-section">
+            <div class="section-header">
+                <h2>Cache Stats</h2>
+                <button class="small" onclick="loadCacheStats()">Refresh</button>
+            </div>
+            <div id="cache-stats">Loading...</div>
+        </section>
+
+        <!-- Active Torrents -->
+        <section class="card" id="torrents-section">
+            <div class="section-header">
+                <h2>Cached Torrents</h2>
+                <button class="small" onclick="loadTorrents()">Refresh</button>
+            </div>
+            <div id="torrents-list">Loading...</div>
+        </section>
+    </div>
+    <script src="/ui/app.js"></script>
+</body>
+</html>

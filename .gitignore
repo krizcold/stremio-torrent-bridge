@@ -1,0 +1,18 @@
+# Binary
+bridge
+*.exe
+
+# Dependencies
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Environment
+.env
+*.env
+
+# OS
+.DS_Store
