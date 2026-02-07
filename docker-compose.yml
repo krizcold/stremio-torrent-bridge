@@ -25,7 +25,7 @@ services:
 
   # Bridge Service (Addon Wrapper + Router)
   bridge:
-    image: ghcr.io/krizcold/stremio-torrent-bridge:0.1.0
+    image: ghcr.io/krizcold/stremio-torrent-bridge:0.1.2
     container_name: stremio-bridge
     restart: unless-stopped
     cpu_shares: 80
@@ -70,7 +70,7 @@ services:
 
   # Engine A: TorrServer
   torrserver:
-    image: ghcr.io/yourok/torrserver:1.2.136
+    image: ghcr.io/yourok/torrserver:MatriX.137
     container_name: stremio-bridge-torrserver
     restart: unless-stopped
     cpu_shares: 50
@@ -86,7 +86,7 @@ services:
 
   # Engine B: rqbit
   rqbit:
-    image: ikatson/rqbit:7.0.1
+    image: ikatson/rqbit:8.1.1
     container_name: stremio-bridge-rqbit
     restart: unless-stopped
     cpu_shares: 50
@@ -99,7 +99,7 @@ services:
 
   # Engine C: qBittorrent
   qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:4.6.7
+    image: lscr.io/linuxserver/qbittorrent:5.1.4
     container_name: stremio-bridge-qbittorrent
     restart: unless-stopped
     cpu_shares: 50
