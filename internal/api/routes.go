@@ -12,10 +12,11 @@ import (
 )
 
 // AddonRouter is the interface satisfied by a go-stremio addon for registering
-// custom HTTP endpoints. Using an interface keeps the API layer testable
-// without importing the full stremio dependency.
+// custom HTTP endpoints and middleware. Using an interface keeps the API layer
+// testable without importing the full stremio dependency.
 type AddonRouter interface {
 	AddEndpoint(method, path string, handler func(*fiber.Ctx))
+	AddMiddleware(path string, middleware func(*fiber.Ctx))
 }
 
 // RegisterRoutes wires all API, wrap, stream, and UI routes onto the given
@@ -42,15 +43,17 @@ func RegisterRoutes(router AddonRouter, h *Handlers, w *addonpkg.Wrapper, sp *pr
 	router.AddEndpoint("DELETE", "/api/cache/torrents/:hash", h.HandleRemoveTorrent)
 
 	// --- Stremio wrap routes (addon protocol) --------------------------------
+	// Registered as middleware so they run BEFORE go-stremio's built-in route
+	// handlers, which would otherwise intercept paths containing manifest.json,
+	// /stream/, and /catalog/ patterns.
 
-	router.AddEndpoint("GET", "/wrap/:wrapId/manifest.json", w.HandleManifest)
-	router.AddEndpoint("GET", "/wrap/:wrapId/catalog/:type/:catalogId.json", w.HandleCatalog)
-	router.AddEndpoint("GET", "/wrap/:wrapId/meta/:type/:metaId.json", w.HandleMeta)
-	router.AddEndpoint("GET", "/wrap/:wrapId/stream/:type/:streamId.json", w.HandleStream)
+	router.AddMiddleware("/wrap", wrapMiddleware(w))
 
 	// --- Stream proxy route --------------------------------------------------
+	// Also registered as middleware to avoid conflict with go-stremio's
+	// /stream/:type/:id.json handler.
 
-	router.AddEndpoint("GET", "/stream/:infoHash/:fileIndex", sp.HandleStream)
+	router.AddMiddleware("/stream", streamProxyMiddleware(sp))
 
 	// --- UI routes (embedded static files) -----------------------------------
 
@@ -76,6 +79,116 @@ func RegisterRoutes(router AddonRouter, h *Handlers, w *addonpkg.Wrapper, sp *pr
 		c.Status(301)
 		c.SendString("Redirecting to /ui/index.html")
 	})
+}
+
+// wrapMiddleware returns a Fiber handler that intercepts requests under /wrap/
+// and routes them to the appropriate Wrapper method based on the URL structure.
+// It does NOT call c.Next() for matched requests, preventing go-stremio from
+// handling them.
+func wrapMiddleware(w *addonpkg.Wrapper) func(*fiber.Ctx) {
+	return func(c *fiber.Ctx) {
+		if c.Method() != "GET" {
+			c.Next()
+			return
+		}
+
+		path := c.Path()
+
+		// Strip the /wrap/ prefix to get: {wrapId}/manifest.json, etc.
+		rest := strings.TrimPrefix(path, "/wrap/")
+		if rest == path {
+			// Didn't start with /wrap/
+			c.Next()
+			return
+		}
+
+		parts := strings.SplitN(rest, "/", 2)
+		if len(parts) < 2 {
+			c.Next()
+			return
+		}
+
+		wrapID := parts[0]
+		remainder := parts[1] // e.g. "manifest.json", "stream/movie/tt123.json"
+
+		// Inject wrapId as a Fiber local so handlers can read it.
+		c.Locals("wrapId", wrapID)
+
+		switch {
+		case remainder == "manifest.json":
+			w.HandleManifest(c)
+		case strings.HasPrefix(remainder, "catalog/"):
+			// catalog/{type}/{catalogId}.json
+			seg := strings.TrimPrefix(remainder, "catalog/")
+			typAndID := strings.SplitN(seg, "/", 2)
+			if len(typAndID) == 2 {
+				c.Locals("type", typAndID[0])
+				c.Locals("catalogId", strings.TrimSuffix(typAndID[1], ".json"))
+				w.HandleCatalog(c)
+			} else {
+				c.Next()
+			}
+		case strings.HasPrefix(remainder, "meta/"):
+			seg := strings.TrimPrefix(remainder, "meta/")
+			typAndID := strings.SplitN(seg, "/", 2)
+			if len(typAndID) == 2 {
+				c.Locals("type", typAndID[0])
+				c.Locals("metaId", strings.TrimSuffix(typAndID[1], ".json"))
+				w.HandleMeta(c)
+			} else {
+				c.Next()
+			}
+		case strings.HasPrefix(remainder, "stream/"):
+			seg := strings.TrimPrefix(remainder, "stream/")
+			typAndID := strings.SplitN(seg, "/", 2)
+			if len(typAndID) == 2 {
+				c.Locals("type", typAndID[0])
+				c.Locals("streamId", strings.TrimSuffix(typAndID[1], ".json"))
+				w.HandleStream(c)
+			} else {
+				c.Next()
+			}
+		default:
+			c.Next()
+		}
+	}
+}
+
+// streamProxyMiddleware returns a Fiber handler that intercepts requests under
+// /stream/ for the video stream proxy. It matches /stream/{infoHash}/{fileIndex}
+// (no .json suffix) and prevents go-stremio from catching these.
+func streamProxyMiddleware(sp *proxy.StreamProxy) func(*fiber.Ctx) {
+	return func(c *fiber.Ctx) {
+		if c.Method() != "GET" {
+			c.Next()
+			return
+		}
+
+		path := c.Path()
+		rest := strings.TrimPrefix(path, "/stream/")
+		if rest == path {
+			c.Next()
+			return
+		}
+
+		// Only match /stream/{infoHash}/{fileIndex} (no .json suffix).
+		// Requests ending in .json are go-stremio's stream protocol and
+		// should fall through.
+		if strings.HasSuffix(path, ".json") {
+			c.Next()
+			return
+		}
+
+		parts := strings.SplitN(rest, "/", 2)
+		if len(parts) != 2 {
+			c.Next()
+			return
+		}
+
+		c.Locals("infoHash", parts[0])
+		c.Locals("fileIndex", parts[1])
+		sp.HandleStream(c)
+	}
 }
 
 // contentTypeFromExt returns the MIME content type for common static file

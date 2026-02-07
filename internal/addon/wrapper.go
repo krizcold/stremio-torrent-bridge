@@ -40,7 +40,7 @@ func NewWrapper(store *AddonStore, eng engine.Engine, externalURL string) *Wrapp
 //
 // Route: GET /wrap/:wrapId/manifest.json
 func (w *Wrapper) HandleManifest(c *fiber.Ctx) {
-	wrapID := c.Params("wrapId")
+	wrapID := param(c, "wrapId")
 
 	addon, found := w.store.Get(wrapID)
 	if !found {
@@ -112,9 +112,9 @@ func (w *Wrapper) HandleManifest(c *fiber.Ctx) {
 //
 // Route: GET /wrap/:wrapId/catalog/:type/:catalogId.json
 func (w *Wrapper) HandleCatalog(c *fiber.Ctx) {
-	wrapID := c.Params("wrapId")
-	contentType := c.Params("type")
-	catalogID := c.Params("catalogId")
+	wrapID := param(c, "wrapId")
+	contentType := param(c, "type")
+	catalogID := param(c, "catalogId")
 
 	addon, found := w.store.Get(wrapID)
 	if !found {
@@ -142,9 +142,9 @@ func (w *Wrapper) HandleCatalog(c *fiber.Ctx) {
 //
 // Route: GET /wrap/:wrapId/meta/:type/:metaId.json
 func (w *Wrapper) HandleMeta(c *fiber.Ctx) {
-	wrapID := c.Params("wrapId")
-	contentType := c.Params("type")
-	metaID := c.Params("metaId")
+	wrapID := param(c, "wrapId")
+	contentType := param(c, "type")
+	metaID := param(c, "metaId")
 
 	addon, found := w.store.Get(wrapID)
 	if !found {
@@ -174,9 +174,9 @@ func (w *Wrapper) HandleMeta(c *fiber.Ctx) {
 //
 // Route: GET /wrap/:wrapId/stream/:type/:streamId.json
 func (w *Wrapper) HandleStream(c *fiber.Ctx) {
-	wrapID := c.Params("wrapId")
-	contentType := c.Params("type")
-	streamID := c.Params("streamId")
+	wrapID := param(c, "wrapId")
+	contentType := param(c, "type")
+	streamID := param(c, "streamId")
 
 	addon, found := w.store.Get(wrapID)
 	if !found {
@@ -313,6 +313,15 @@ func (w *Wrapper) resolveExternalURL(c *fiber.Ctx) string {
 	}
 
 	return scheme + "://" + c.Hostname()
+}
+
+// param reads a named value from Fiber context, checking Locals first (set by
+// middleware routing) then falling back to Params (set by Fiber route params).
+func param(c *fiber.Ctx, key string) string {
+	if v, ok := c.Locals(key).(string); ok && v != "" {
+		return v
+	}
+	return c.Params(key)
 }
 
 // fetchJSON performs a GET request and returns the response body as bytes.

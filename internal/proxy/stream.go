@@ -13,6 +13,15 @@ import (
 	"github.com/krizcold/stremio-torrent-bridge/internal/engine"
 )
 
+// param reads a named value from Fiber context, checking Locals first (set by
+// middleware routing) then falling back to Params (set by Fiber route params).
+func param(c *fiber.Ctx, key string) string {
+	if v, ok := c.Locals(key).(string); ok && v != "" {
+		return v
+	}
+	return c.Params(key)
+}
+
 // hopByHopHeaders are headers that must not be forwarded from the upstream
 // engine response to the client. These are connection-scoped and meaningless
 // for the end-to-end stream delivery.
@@ -42,7 +51,7 @@ func NewStreamProxy(eng engine.Engine, cm *cache.CacheManager) *StreamProxy {
 // It proxies the video stream from the torrent engine to the client with zero
 // buffering, preserving Range request semantics for seek support.
 func (sp *StreamProxy) HandleStream(c *fiber.Ctx) {
-	infoHash := c.Params("infoHash")
+	infoHash := param(c, "infoHash")
 	if infoHash == "" {
 		c.Status(http.StatusBadRequest)
 		c.Set("Content-Type", "application/json")
@@ -51,7 +60,7 @@ func (sp *StreamProxy) HandleStream(c *fiber.Ctx) {
 	}
 
 	fileIndex := 0
-	if fi := c.Params("fileIndex"); fi != "" {
+	if fi := param(c, "fileIndex"); fi != "" {
 		parsed, err := strconv.Atoi(fi)
 		if err != nil {
 			c.Status(http.StatusBadRequest)
