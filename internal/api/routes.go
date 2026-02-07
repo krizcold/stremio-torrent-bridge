@@ -6,9 +6,9 @@ import (
 
 	"github.com/gofiber/fiber"
 
-	addonpkg "github.com/yundera/stremio-torrent-bridge/internal/addon"
-	"github.com/yundera/stremio-torrent-bridge/internal/proxy"
-	"github.com/yundera/stremio-torrent-bridge/internal/ui"
+	addonpkg "github.com/krizcold/stremio-torrent-bridge/internal/addon"
+	"github.com/krizcold/stremio-torrent-bridge/internal/proxy"
+	"github.com/krizcold/stremio-torrent-bridge/internal/ui"
 )
 
 // AddonRouter is the interface satisfied by a go-stremio addon for registering

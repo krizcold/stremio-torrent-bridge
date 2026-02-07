@@ -9,8 +9,8 @@ import (
 
 	"github.com/gofiber/fiber"
 
-	"github.com/yundera/stremio-torrent-bridge/internal/cache"
-	"github.com/yundera/stremio-torrent-bridge/internal/engine"
+	"github.com/krizcold/stremio-torrent-bridge/internal/cache"
+	"github.com/krizcold/stremio-torrent-bridge/internal/engine"
 )
 
 // hopByHopHeaders are headers that must not be forwarded from the upstream

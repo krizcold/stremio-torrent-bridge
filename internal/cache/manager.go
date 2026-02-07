@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yundera/stremio-torrent-bridge/internal/config"
-	"github.com/yundera/stremio-torrent-bridge/internal/engine"
+	"github.com/krizcold/stremio-torrent-bridge/internal/config"
+	"github.com/krizcold/stremio-torrent-bridge/internal/engine"
 )
 
 // AccessEntry tracks when a torrent was last accessed for LRU eviction.

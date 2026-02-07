@@ -1,4 +1,4 @@
-module github.com/yundera/stremio-torrent-bridge
+module github.com/krizcold/stremio-torrent-bridge
 
 go 1.22
 

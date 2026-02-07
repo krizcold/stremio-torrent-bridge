@@ -11,8 +11,8 @@ import (
 
 	"github.com/gofiber/fiber"
 
-	"github.com/yundera/stremio-torrent-bridge/internal/engine"
-	"github.com/yundera/stremio-torrent-bridge/pkg/httpclient"
+	"github.com/krizcold/stremio-torrent-bridge/internal/engine"
+	"github.com/krizcold/stremio-torrent-bridge/pkg/httpclient"
 )
 
 // Wrapper intercepts Stremio addon requests, rewrites manifests to brand them

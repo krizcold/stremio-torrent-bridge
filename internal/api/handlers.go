@@ -9,10 +9,10 @@ import (
 
 	"github.com/gofiber/fiber"
 
-	"github.com/yundera/stremio-torrent-bridge/internal/addon"
-	"github.com/yundera/stremio-torrent-bridge/internal/cache"
-	"github.com/yundera/stremio-torrent-bridge/internal/config"
-	"github.com/yundera/stremio-torrent-bridge/internal/engine"
+	"github.com/krizcold/stremio-torrent-bridge/internal/addon"
+	"github.com/krizcold/stremio-torrent-bridge/internal/cache"
+	"github.com/krizcold/stremio-torrent-bridge/internal/config"
+	"github.com/krizcold/stremio-torrent-bridge/internal/engine"
 )
 
 // Handlers groups the HTTP handlers for the management REST API.

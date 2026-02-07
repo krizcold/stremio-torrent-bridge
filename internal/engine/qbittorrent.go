@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yundera/stremio-torrent-bridge/pkg/httpclient"
+	"github.com/krizcold/stremio-torrent-bridge/pkg/httpclient"
 )
 
 // QBittorrentAdapter implements Engine for qBittorrent via its Web API v2.

@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/yundera/stremio-torrent-bridge/pkg/httpclient"
+	"github.com/krizcold/stremio-torrent-bridge/pkg/httpclient"
 )
 
 // TorrServerAdapter implements Engine for TorrServer (github.com/YouROK/TorrServer)

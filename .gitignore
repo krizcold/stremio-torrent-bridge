@@ -1,5 +1,5 @@
-# Binary
-bridge
+# Binary (at repo root only, not cmd/bridge/)
+/bridge
 *.exe
 
 # Dependencies

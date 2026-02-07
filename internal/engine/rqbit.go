@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/yundera/stremio-torrent-bridge/pkg/httpclient"
+	"github.com/krizcold/stremio-torrent-bridge/pkg/httpclient"
 )
 
 // RqbitAdapter implements Engine for rqbit (github.com/ikatson/rqbit)
