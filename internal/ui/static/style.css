@@ -113,6 +113,13 @@ input::placeholder {
     color: #666;
 }
 
+.form-hint {
+    margin-top: 6px;
+    font-size: 0.8rem;
+    color: #888;
+    line-height: 1.4;
+}
+
 /* ---------------------------------------------------------------------------
    Buttons
 --------------------------------------------------------------------------- */
@@ -286,6 +293,12 @@ button.small {
     gap: 10px;
 }
 
+.addon-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
 .addon-name {
     font-weight: 600;
     font-size: 1.1rem;
@@ -293,7 +306,49 @@ button.small {
 
 .addon-actions {
     display: flex;
+    align-items: center;
     gap: 8px;
+}
+
+.addon-fetch-select {
+    width: auto;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    background: #16213e;
+    border: 1px solid #1a4d7a;
+    border-radius: 4px;
+    color: #eee;
+}
+
+/* Fetch status indicators */
+.fetch-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    font-size: 0.65rem;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.fetch-ok {
+    background: rgba(78, 201, 176, 0.2);
+    color: #4ec9b0;
+    border: 2px solid rgba(78, 201, 176, 0.5);
+}
+
+.fetch-blocked {
+    background: rgba(233, 69, 96, 0.2);
+    color: #e94560;
+    border: 2px solid rgba(233, 69, 96, 0.5);
+}
+
+.fetch-unknown {
+    background: rgba(170, 170, 170, 0.15);
+    color: #999;
+    border: 2px solid rgba(170, 170, 170, 0.3);
 }
 
 .addon-url {
@@ -505,6 +560,58 @@ button.small {
 }
 
 /* ---------------------------------------------------------------------------
+   Browser Tab Relay
+--------------------------------------------------------------------------- */
+
+.relay-banner {
+    border-color: #4ec9b0;
+    background: #132e3e;
+}
+
+.relay-banner.relay-disconnected {
+    border-color: #e94560;
+    background: #2e1320;
+}
+
+.relay-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.relay-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #4ec9b0;
+    flex-shrink: 0;
+    animation: relayPulse 2s infinite;
+}
+
+.relay-disconnected .relay-dot {
+    background: #e94560;
+    animation: none;
+}
+
+@keyframes relayPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.relay-label {
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.relay-warning {
+    font-size: 0.85rem;
+    color: #f0a500;
+    margin: 0;
+    line-height: 1.4;
+}
+
+/* ---------------------------------------------------------------------------
    Responsive
 --------------------------------------------------------------------------- */
 
@@ -528,6 +635,10 @@ button.small {
     .addon-header {
         flex-direction: column;
         align-items: flex-start;
+    }
+
+    .addon-actions {
+        flex-wrap: wrap;
     }
 
     .addon-wrapped {

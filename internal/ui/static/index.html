@@ -13,6 +13,15 @@
             <p class="subtitle">Stremio addon wrapper for full peer connectivity</p>
         </header>
 
+        <!-- Browser Tab Relay Indicator (only shown when relay is active) -->
+        <section class="card relay-banner" id="relay-section" style="display: none;">
+            <div class="relay-header">
+                <span class="relay-dot" id="relay-dot"></span>
+                <span class="relay-label" id="relay-label">Relay Disconnected</span>
+            </div>
+            <p class="relay-warning" id="relay-warning">Your browser is being used to relay addon requests. Do not close this tab while streaming.</p>
+        </section>
+
         <!-- Engine Status -->
         <section class="card" id="status-section">
             <h2>Engine Status</h2>
@@ -45,6 +54,21 @@
                     <option value="rqbit">rqbit</option>
                     <option value="qbittorrent">qBittorrent</option>
                 </select>
+            </div>
+            <div class="form-group">
+                <label>Default Fetch Method</label>
+                <select id="fetch-method-select">
+                    <option value="sw_fallback">SW + Fallback (Recommended)</option>
+                    <option value="tab_relay">Browser Tab Relay</option>
+                    <option value="sw_only">Service Worker Only</option>
+                    <option value="direct">PCS-IP Only (Direct)</option>
+                    <option value="proxy">Custom Proxy</option>
+                </select>
+                <div class="form-hint" id="fetch-method-hint"></div>
+            </div>
+            <div class="form-group" id="proxy-url-group" style="display: none;">
+                <label>Proxy URL</label>
+                <input type="text" id="proxy-url" placeholder="socks5://proxy:1080 or http://proxy:8080" />
             </div>
             <div class="form-group">
                 <label>Cache Size (GB)</label>

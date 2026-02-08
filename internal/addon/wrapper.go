@@ -8,29 +8,45 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber"
 
+	"github.com/krizcold/stremio-torrent-bridge/internal/config"
 	"github.com/krizcold/stremio-torrent-bridge/internal/engine"
+	"github.com/krizcold/stremio-torrent-bridge/internal/relay"
 	"github.com/krizcold/stremio-torrent-bridge/pkg/httpclient"
 )
+
+// param reads a named value from Fiber context, checking Locals first (set by
+// middleware routing) then falling back to Params (set by Fiber route params).
+func param(c *fiber.Ctx, key string) string {
+	if v, ok := c.Locals(key).(string); ok && v != "" {
+		return v
+	}
+	return c.Params(key)
+}
 
 // Wrapper intercepts Stremio addon requests, rewrites manifests to brand them
 // as bridge addons, and replaces torrent infoHash streams with direct HTTP
 // stream URLs served by the local torrent engine.
 type Wrapper struct {
 	store       *AddonStore
+	config      *config.Config
 	engine      engine.Engine
-	externalURL string // BRIDGE_EXTERNAL_URL or empty (falls back to Host header)
+	relay       *relay.Server // may be nil
+	externalURL string        // BRIDGE_EXTERNAL_URL or empty (falls back to Host header)
 	httpClient  *http.Client
 }
 
 // NewWrapper creates a Wrapper that proxies and rewrites Stremio addon responses.
-func NewWrapper(store *AddonStore, eng engine.Engine, externalURL string) *Wrapper {
+func NewWrapper(store *AddonStore, cfg *config.Config, eng engine.Engine, relayServer *relay.Server) *Wrapper {
 	return &Wrapper{
 		store:       store,
+		config:      cfg,
 		engine:      eng,
-		externalURL: strings.TrimRight(externalURL, "/"),
+		relay:       relayServer,
+		externalURL: strings.TrimRight(cfg.ExternalURL, "/"),
 		httpClient:  httpclient.New(),
 	}
 }
@@ -51,7 +67,7 @@ func (w *Wrapper) HandleManifest(c *fiber.Ctx) {
 	}
 
 	// Fetch the original manifest from the upstream addon.
-	data, err := w.fetchJSON(addon.OriginalURL)
+	data, err := w.fetchForAddon(wrapID, addon.OriginalURL)
 	if err != nil {
 		fmt.Printf("wrapper: fetch manifest from %s: %v\n", addon.OriginalURL, err)
 		c.Status(http.StatusBadGateway)
@@ -82,7 +98,7 @@ func (w *Wrapper) HandleManifest(c *fiber.Ctx) {
 		manifest["id"] = "com.yundera.bridge." + origID
 	}
 	if name, ok := manifest["name"].(string); ok {
-		manifest["name"] = "[Bridge] " + name
+		manifest["name"] = "[Torrent-Bridge] " + name
 	}
 
 	// Remove behaviorHints to prevent Stremio from showing config prompts.
@@ -126,7 +142,7 @@ func (w *Wrapper) HandleCatalog(c *fiber.Ctx) {
 
 	originalURL := getBaseURL(addon.OriginalURL) + "/catalog/" + contentType + "/" + catalogID + ".json"
 
-	data, err := w.fetchJSON(originalURL)
+	data, err := w.fetchForAddon(wrapID, originalURL)
 	if err != nil {
 		fmt.Printf("wrapper: fetch catalog from %s: %v\n", originalURL, err)
 		c.Set("Content-Type", "application/json")
@@ -156,7 +172,7 @@ func (w *Wrapper) HandleMeta(c *fiber.Ctx) {
 
 	originalURL := getBaseURL(addon.OriginalURL) + "/meta/" + contentType + "/" + metaID + ".json"
 
-	data, err := w.fetchJSON(originalURL)
+	data, err := w.fetchForAddon(wrapID, originalURL)
 	if err != nil {
 		fmt.Printf("wrapper: fetch meta from %s: %v\n", originalURL, err)
 		c.Set("Content-Type", "application/json")
@@ -188,7 +204,7 @@ func (w *Wrapper) HandleStream(c *fiber.Ctx) {
 
 	originalURL := getBaseURL(addon.OriginalURL) + "/stream/" + contentType + "/" + streamID + ".json"
 
-	data, err := w.fetchJSON(originalURL)
+	data, err := w.fetchForAddon(wrapID, originalURL)
 	if err != nil {
 		fmt.Printf("wrapper: fetch streams from %s: %v\n", originalURL, err)
 		c.Set("Content-Type", "application/json")
@@ -265,7 +281,7 @@ func (w *Wrapper) HandleStream(c *fiber.Ctx) {
 
 		// Tag the title so users know this stream goes through the bridge.
 		if title, ok := item["title"].(string); ok {
-			item["title"] = title + " [Bridge]"
+			item["title"] = title + " [Torrent-Bridge]"
 		}
 
 		streams[i] = item
@@ -315,13 +331,63 @@ func (w *Wrapper) resolveExternalURL(c *fiber.Ctx) string {
 	return scheme + "://" + c.Hostname()
 }
 
-// param reads a named value from Fiber context, checking Locals first (set by
-// middleware routing) then falling back to Params (set by Fiber route params).
-func param(c *fiber.Ctx, key string) string {
-	if v, ok := c.Locals(key).(string); ok && v != "" {
-		return v
+// resolveEffectiveMethod returns the effective fetch method for an addon,
+// resolving "global" to the configured default.
+func (w *Wrapper) resolveEffectiveMethod(addonID string) string {
+	addon, found := w.store.Get(addonID)
+	if !found {
+		return w.config.DefaultFetchMethod
 	}
-	return c.Params(key)
+	method := addon.FetchMethod
+	if method == "" || method == FetchMethodGlobal {
+		return w.config.DefaultFetchMethod
+	}
+	return method
+}
+
+// fetchForAddon fetches JSON from a URL using the effective fetch method for
+// the given addon. It routes to direct fetch, relay, or falls back as needed.
+func (w *Wrapper) fetchForAddon(addonID, rawURL string) ([]byte, error) {
+	method := w.resolveEffectiveMethod(addonID)
+
+	switch method {
+	case FetchMethodTabRelay:
+		return w.fetchViaRelay(rawURL)
+	case FetchMethodSWFallback:
+		// Try relay if connected, otherwise fall back to direct fetch.
+		if w.relay != nil && w.relay.Connected() {
+			data, err := w.fetchViaRelay(rawURL)
+			if err == nil {
+				return data, nil
+			}
+			fmt.Printf("wrapper: relay fetch failed, falling back to direct: %v\n", err)
+		}
+		return w.fetchJSON(rawURL)
+	case FetchMethodDirect, FetchMethodSWOnly:
+		// sw_only: SW handles it client-side; if the request reaches the server
+		// it means SW isn't active, so we do a direct fetch as last resort.
+		return w.fetchJSON(rawURL)
+	case FetchMethodProxy:
+		// TODO: proxy support will be added later
+		return w.fetchJSON(rawURL)
+	default:
+		return w.fetchJSON(rawURL)
+	}
+}
+
+// fetchViaRelay sends the fetch request to the connected browser tab.
+func (w *Wrapper) fetchViaRelay(rawURL string) ([]byte, error) {
+	if w.relay == nil {
+		return nil, fmt.Errorf("relay not configured")
+	}
+	data, statusCode, err := w.relay.Fetch(rawURL, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if statusCode < 200 || statusCode >= 300 {
+		return nil, fmt.Errorf("relay: unexpected status %d from %s", statusCode, rawURL)
+	}
+	return data, nil
 }
 
 // fetchJSON performs a GET request and returns the response body as bytes.

@@ -8,6 +8,7 @@ import (
 
 	addonpkg "github.com/krizcold/stremio-torrent-bridge/internal/addon"
 	"github.com/krizcold/stremio-torrent-bridge/internal/proxy"
+	"github.com/krizcold/stremio-torrent-bridge/internal/relay"
 	"github.com/krizcold/stremio-torrent-bridge/internal/ui"
 )
 
@@ -27,12 +28,13 @@ type AddonRouter interface {
 //   - h: the management API handlers
 //   - w: the Stremio addon wrapper (manifest rewrite, stream interception)
 //   - sp: the video stream proxy
-func RegisterRoutes(router AddonRouter, h *Handlers, w *addonpkg.Wrapper, sp *proxy.StreamProxy) {
+func RegisterRoutes(router AddonRouter, h *Handlers, w *addonpkg.Wrapper, sp *proxy.StreamProxy, rs *relay.Server) {
 	// --- Management API routes -----------------------------------------------
 
 	router.AddEndpoint("POST", "/api/addons", h.HandleAddAddon)
 	router.AddEndpoint("GET", "/api/addons", h.HandleListAddons)
 	router.AddEndpoint("DELETE", "/api/addons/:id", h.HandleRemoveAddon)
+	router.AddEndpoint("PATCH", "/api/addons/:id", h.HandleUpdateAddon)
 	router.AddEndpoint("GET", "/api/config", h.HandleGetConfig)
 	router.AddEndpoint("PUT", "/api/config", h.HandleUpdateConfig)
 
@@ -54,6 +56,18 @@ func RegisterRoutes(router AddonRouter, h *Handlers, w *addonpkg.Wrapper, sp *pr
 	// /stream/:type/:id.json handler.
 
 	router.AddMiddleware("/stream", streamProxyMiddleware(sp))
+
+	// --- Browser Tab Relay routes ---------------------------------------------
+
+	router.AddEndpoint("GET", "/api/relay/pending", rs.HandlePending)
+	router.AddEndpoint("POST", "/api/relay/response/:id", rs.HandleResponse)
+	router.AddEndpoint("GET", "/api/relay/status", rs.HandleStatus)
+
+	// --- Service Worker routes ------------------------------------------------
+	// These must be publicly accessible (no auth hash required).
+	// nginx-hash-lock ALLOWED_PATHS includes "sw".
+
+	router.AddEndpoint("GET", "/sw/config.json", h.HandleSWConfig)
 
 	// --- UI routes (embedded static files) -----------------------------------
 

@@ -53,6 +53,8 @@ func (s *AddonStore) Add(originalURL string) (*WrappedAddon, error) {
 		ID:          id,
 		OriginalURL: originalURL,
 		Name:        "", // Will be populated later when manifest is fetched
+		FetchMethod: FetchMethodGlobal,
+		FetchStatus: FetchStatusUnknown,
 		CreatedAt:   time.Now(),
 	}
 
@@ -132,6 +134,44 @@ func (s *AddonStore) UpdateName(id string, name string) error {
 	return nil
 }
 
+// UpdateFetchMethod sets the fetch method for an addon
+func (s *AddonStore) UpdateFetchMethod(id string, method string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	addon, found := s.addons[id]
+	if !found {
+		return fmt.Errorf("addon with id %s not found", id)
+	}
+
+	addon.FetchMethod = method
+
+	if err := s.save(); err != nil {
+		return fmt.Errorf("failed to save after fetch method update: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateFetchStatus sets the fetch status for an addon
+func (s *AddonStore) UpdateFetchStatus(id string, status string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	addon, found := s.addons[id]
+	if !found {
+		return fmt.Errorf("addon with id %s not found", id)
+	}
+
+	addon.FetchStatus = status
+
+	if err := s.save(); err != nil {
+		return fmt.Errorf("failed to save after fetch status update: %w", err)
+	}
+
+	return nil
+}
+
 // load reads the addons from the JSON file on disk
 func (s *AddonStore) load() error {
 	data, err := os.ReadFile(s.filePath)
@@ -142,6 +182,16 @@ func (s *AddonStore) load() error {
 	var addons map[string]*WrappedAddon
 	if err := json.Unmarshal(data, &addons); err != nil {
 		return fmt.Errorf("failed to unmarshal addons: %w", err)
+	}
+
+	// Backward compatibility: set defaults for addons loaded from older formats.
+	for _, a := range addons {
+		if a.FetchMethod == "" {
+			a.FetchMethod = FetchMethodGlobal
+		}
+		if a.FetchStatus == "" {
+			a.FetchStatus = FetchStatusUnknown
+		}
 	}
 
 	s.addons = addons

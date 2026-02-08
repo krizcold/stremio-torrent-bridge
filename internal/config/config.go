@@ -24,6 +24,10 @@ type Config struct {
 	QBitUsername     string // env: QBITTORRENT_USERNAME, default: "admin"
 	QBitPassword     string // env: QBITTORRENT_PASSWORD, default: "adminadmin"
 
+	// Fetch proxy
+	DefaultFetchMethod string // env: DEFAULT_FETCH_METHOD, default: "sw_fallback"
+	ProxyURL           string // env: PROXY_URL, default: "" (for custom proxy fetch method)
+
 	// Cache
 	CacheSizeGB     int // env: CACHE_SIZE_GB, default: 60
 	CacheMaxAgeDays int // env: CACHE_MAX_AGE_DAYS, default: 7
@@ -50,6 +54,10 @@ func Load() *Config {
 		QBitDownloadPath: "/downloads",
 		QBitUsername:     "admin",
 		QBitPassword:     "adminadmin",
+
+		// Fetch proxy defaults
+		DefaultFetchMethod: "sw_fallback",
+		ProxyURL:           "",
 
 		// Cache defaults
 		CacheSizeGB:     60,
@@ -92,6 +100,12 @@ func Load() *Config {
 	if v := os.Getenv("QBITTORRENT_PASSWORD"); v != "" {
 		c.QBitPassword = v
 	}
+	if v := os.Getenv("DEFAULT_FETCH_METHOD"); v != "" {
+		c.DefaultFetchMethod = v
+	}
+	if v := os.Getenv("PROXY_URL"); v != "" {
+		c.ProxyURL = v
+	}
 	if v := os.Getenv("CACHE_SIZE_GB"); v != "" {
 		if size, err := strconv.Atoi(v); err == nil {
 			c.CacheSizeGB = size
@@ -123,6 +137,10 @@ func (c *Config) LogSummary() {
 	fmt.Printf("    TorrServer:    %s\n", c.TorrServerURL)
 	fmt.Printf("    rqbit:         %s\n", c.RqbitURL)
 	fmt.Printf("    qBittorrent:   %s\n", c.QBittorrentURL)
+	fmt.Printf("  Fetch Method:    %s\n", c.DefaultFetchMethod)
+	if c.ProxyURL != "" {
+		fmt.Printf("  Proxy URL:       %s\n", c.ProxyURL)
+	}
 	fmt.Printf("  Cache:           %d GB, max age %d days\n", c.CacheSizeGB, c.CacheMaxAgeDays)
 	fmt.Printf("  Data Directory:  %s\n", c.DataDir)
 }

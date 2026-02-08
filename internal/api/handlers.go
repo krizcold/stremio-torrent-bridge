@@ -51,6 +51,8 @@ type listAddonItem struct {
 	OriginalURL string    `json:"originalUrl"`
 	WrappedURL  string    `json:"wrappedUrl"`
 	Name        string    `json:"name"`
+	FetchMethod string    `json:"fetchMethod"`
+	FetchStatus string    `json:"fetchStatus"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
@@ -60,16 +62,24 @@ type engineStatus struct {
 }
 
 type configResponse struct {
-	DefaultEngine   string                   `json:"defaultEngine"`
-	CacheSizeGB     int                      `json:"cacheSizeGB"`
-	CacheMaxAgeDays int                      `json:"cacheMaxAgeDays"`
-	Engines         map[string]*engineStatus `json:"engines"`
+	DefaultEngine      string                   `json:"defaultEngine"`
+	DefaultFetchMethod string                   `json:"defaultFetchMethod"`
+	ProxyURL           string                   `json:"proxyURL"`
+	CacheSizeGB        int                      `json:"cacheSizeGB"`
+	CacheMaxAgeDays    int                      `json:"cacheMaxAgeDays"`
+	Engines            map[string]*engineStatus `json:"engines"`
 }
 
 type updateConfigRequest struct {
-	DefaultEngine   *string `json:"defaultEngine"`
-	CacheSizeGB     *int    `json:"cacheSizeGB"`
-	CacheMaxAgeDays *int    `json:"cacheMaxAgeDays"`
+	DefaultEngine      *string `json:"defaultEngine"`
+	DefaultFetchMethod *string `json:"defaultFetchMethod"`
+	ProxyURL           *string `json:"proxyURL"`
+	CacheSizeGB        *int    `json:"cacheSizeGB"`
+	CacheMaxAgeDays    *int    `json:"cacheMaxAgeDays"`
+}
+
+type updateAddonRequest struct {
+	FetchMethod *string `json:"fetchMethod"`
 }
 
 // --- addon endpoints ---------------------------------------------------------
@@ -128,6 +138,8 @@ func (h *Handlers) HandleListAddons(c *fiber.Ctx) {
 			OriginalURL: a.OriginalURL,
 			WrappedURL:  externalBase + "/wrap/" + a.ID + "/manifest.json",
 			Name:        a.Name,
+			FetchMethod: a.FetchMethod,
+			FetchStatus: a.FetchStatus,
 			CreatedAt:   a.CreatedAt,
 		})
 	}
@@ -147,6 +159,45 @@ func (h *Handlers) HandleRemoveAddon(c *fiber.Ctx) {
 		c.Set("Content-Type", "application/json")
 		c.SendString(`{"error":"addon not found"}`)
 		return
+	}
+
+	c.Set("Content-Type", "application/json")
+	c.SendString(`{"success":true}`)
+}
+
+// HandleUpdateAddon handles PATCH /api/addons/:id.
+// It updates per-addon settings like fetch method.
+func (h *Handlers) HandleUpdateAddon(c *fiber.Ctx) {
+	id := c.Params("id")
+
+	if _, found := h.store.Get(id); !found {
+		c.Status(http.StatusNotFound)
+		c.Set("Content-Type", "application/json")
+		c.SendString(`{"error":"addon not found"}`)
+		return
+	}
+
+	var req updateAddonRequest
+	if err := json.Unmarshal([]byte(c.Body()), &req); err != nil {
+		c.Status(http.StatusBadRequest)
+		c.Set("Content-Type", "application/json")
+		c.SendString(`{"error":"invalid JSON body"}`)
+		return
+	}
+
+	if req.FetchMethod != nil {
+		if !addon.ValidFetchMethods[*req.FetchMethod] {
+			c.Status(http.StatusBadRequest)
+			c.Set("Content-Type", "application/json")
+			c.SendString(`{"error":"fetchMethod must be one of: global, sw_fallback, tab_relay, sw_only, direct, proxy"}`)
+			return
+		}
+		if err := h.store.UpdateFetchMethod(id, *req.FetchMethod); err != nil {
+			c.Status(http.StatusInternalServerError)
+			c.Set("Content-Type", "application/json")
+			c.SendString(`{"error":"failed to update fetch method"}`)
+			return
+		}
 	}
 
 	c.Set("Content-Type", "application/json")
@@ -186,10 +237,12 @@ func (h *Handlers) HandleGetConfig(c *fiber.Ctx) {
 	}
 
 	resp := configResponse{
-		DefaultEngine:   h.config.DefaultEngine,
-		CacheSizeGB:     h.config.CacheSizeGB,
-		CacheMaxAgeDays: h.config.CacheMaxAgeDays,
-		Engines:         engines,
+		DefaultEngine:      h.config.DefaultEngine,
+		DefaultFetchMethod: h.config.DefaultFetchMethod,
+		ProxyURL:           h.config.ProxyURL,
+		CacheSizeGB:        h.config.CacheSizeGB,
+		CacheMaxAgeDays:    h.config.CacheMaxAgeDays,
+		Engines:            engines,
 	}
 
 	out, _ := json.Marshal(resp)
@@ -246,12 +299,30 @@ func (h *Handlers) HandleUpdateConfig(c *fiber.Ctx) {
 		h.config.CacheMaxAgeDays = *req.CacheMaxAgeDays
 	}
 
+	// Validate defaultFetchMethod if provided.
+	if req.DefaultFetchMethod != nil {
+		if !addon.ValidGlobalFetchMethods[*req.DefaultFetchMethod] {
+			c.Status(http.StatusBadRequest)
+			c.Set("Content-Type", "application/json")
+			c.SendString(`{"error":"defaultFetchMethod must be one of: sw_fallback, tab_relay, sw_only, direct, proxy"}`)
+			return
+		}
+		h.config.DefaultFetchMethod = *req.DefaultFetchMethod
+	}
+
+	// Update proxyURL if provided.
+	if req.ProxyURL != nil {
+		h.config.ProxyURL = *req.ProxyURL
+	}
+
 	// Return the updated config using the same format as GET /api/config,
 	// but skip the engine ping for speed.
 	resp := configResponse{
-		DefaultEngine:   h.config.DefaultEngine,
-		CacheSizeGB:     h.config.CacheSizeGB,
-		CacheMaxAgeDays: h.config.CacheMaxAgeDays,
+		DefaultEngine:      h.config.DefaultEngine,
+		DefaultFetchMethod: h.config.DefaultFetchMethod,
+		ProxyURL:           h.config.ProxyURL,
+		CacheSizeGB:        h.config.CacheSizeGB,
+		CacheMaxAgeDays:    h.config.CacheMaxAgeDays,
 		Engines: map[string]*engineStatus{
 			"torrserver": {
 				URL:    h.config.TorrServerURL,
@@ -333,6 +404,55 @@ func (h *Handlers) HandleRemoveTorrent(c *fiber.Ctx) {
 	}
 	c.Set("Content-Type", "application/json")
 	c.SendString(`{"success":true}`)
+}
+
+// --- service worker endpoints ------------------------------------------------
+
+// swConfigResponse is the JSON returned to the Service Worker so it knows
+// which addons are wrapped and how to reach the bridge.
+type swConfigResponse struct {
+	BridgeBaseURL      string         `json:"bridgeBaseURL"`
+	DefaultFetchMethod string         `json:"defaultFetchMethod"`
+	Addons             []swAddonEntry `json:"addons"`
+}
+
+type swAddonEntry struct {
+	WrapID      string `json:"wrapId"`
+	OriginalURL string `json:"originalUrl"`
+	FetchMethod string `json:"fetchMethod"` // Resolved: never "global", always the effective method
+}
+
+// HandleSWConfig handles GET /sw/config.json.
+// Returns configuration for the injected Service Worker.
+func (h *Handlers) HandleSWConfig(c *fiber.Ctx) {
+	addons := h.store.List()
+	externalBase := resolveExternalURL(h.config, c)
+
+	entries := make([]swAddonEntry, 0, len(addons))
+	for _, a := range addons {
+		// Resolve "global" to the actual default method.
+		method := a.FetchMethod
+		if method == "" || method == addon.FetchMethodGlobal {
+			method = h.config.DefaultFetchMethod
+		}
+		entries = append(entries, swAddonEntry{
+			WrapID:      a.ID,
+			OriginalURL: a.OriginalURL,
+			FetchMethod: method,
+		})
+	}
+
+	resp := swConfigResponse{
+		BridgeBaseURL:      externalBase,
+		DefaultFetchMethod: h.config.DefaultFetchMethod,
+		Addons:             entries,
+	}
+
+	out, _ := json.Marshal(resp)
+	c.Set("Content-Type", "application/json")
+	c.Set("Cache-Control", "no-cache")
+	c.Set("Access-Control-Allow-Origin", "*")
+	c.Send(out)
 }
 
 // --- helpers -----------------------------------------------------------------

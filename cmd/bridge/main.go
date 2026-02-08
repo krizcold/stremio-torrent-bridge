@@ -13,6 +13,7 @@ import (
 	"github.com/krizcold/stremio-torrent-bridge/internal/config"
 	"github.com/krizcold/stremio-torrent-bridge/internal/engine"
 	"github.com/krizcold/stremio-torrent-bridge/internal/proxy"
+	"github.com/krizcold/stremio-torrent-bridge/internal/relay"
 )
 
 func main() {
@@ -44,15 +45,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 4. Create the addon wrapper (manifest rewrite + stream interception)
+	// 4. Create the Browser Tab Relay server for proxying addon fetches
+	//    through a connected browser tab (residential IP).
+	relayServer := relay.NewServer()
+
+	// 5. Create the addon wrapper (manifest rewrite + stream interception)
 	//    and the stream proxy (video passthrough with Range support).
-	wrapper := addon.NewWrapper(store, eng, cfg.ExternalURL)
+	wrapper := addon.NewWrapper(store, cfg, eng, relayServer)
 	streamProxy := proxy.NewStreamProxy(eng, cacheManager)
 
-	// 5. Create the management REST API handlers.
+	// 6. Create the management REST API handlers.
 	handlers := api.NewHandlers(store, cfg, eng, cacheManager)
 
-	// 6. Create the go-stremio addon with manifest and placeholder stream handlers.
+	// 7. Create the go-stremio addon with manifest and placeholder stream handlers.
 	//    The placeholder handlers return NotFound because the real stream handling
 	//    is done by the wrapper (for addon protocol) and stream proxy (for direct
 	//    HTTP streams). go-stremio requires at least one stream handler since our
@@ -92,14 +97,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 7. Register all routes: management API, wrap endpoints, stream proxy, and UI.
-	api.RegisterRoutes(stremioAddon, handlers, wrapper, streamProxy)
+	// 8. Register all routes: management API, wrap endpoints, stream proxy, relay, and UI.
+	api.RegisterRoutes(stremioAddon, handlers, wrapper, streamProxy, relayServer)
 
-	// 8. Start cache manager background cleanup.
+	// 9. Start cache manager background cleanup.
 	cacheManager.Start()
 	defer cacheManager.Stop()
 
-	// 9. Start the server.
+	// 10. Start the server.
 	fmt.Printf("Torrent Bridge starting on %s:%d\n", cfg.BindAddr, cfg.Port)
 	stopChan := make(chan bool, 1)
 	stremioAddon.Run(stopChan)

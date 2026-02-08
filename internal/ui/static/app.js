@@ -1,6 +1,19 @@
 // Auto-refresh interval handle
 let cacheRefreshInterval = null;
 
+// Relay state
+let relayActive = false;
+let relayAbortController = null;
+
+// Fetch method descriptions for the hint text
+const fetchMethodHints = {
+    sw_fallback: 'Service Worker intercepts addon requests in the browser; falls back to server-side fetch if SW is unavailable. Works with Cloudflare-protected addons when using Stremio Web.',
+    tab_relay: 'Bridge UI tab acts as a relay for addon requests using your browser\'s IP. Requires this tab to stay open while streaming.',
+    sw_only: 'All addon fetching through Service Worker only. No server-side fallback. Requires Stremio Web with SW injection configured.',
+    direct: 'Server fetches from addons directly using the PCS server IP. Does NOT work with Cloudflare-protected addons (e.g., Torrentio).',
+    proxy: 'Server fetches through a custom HTTP/SOCKS proxy. Useful if you have a residential proxy or VPN.',
+};
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     loadConfig();
@@ -8,12 +21,184 @@ document.addEventListener('DOMContentLoaded', () => {
     loadCacheStats();
     loadTorrents();
 
+    // Fetch method dropdown change handler
+    const fetchMethodSelect = document.getElementById('fetch-method-select');
+    fetchMethodSelect.addEventListener('change', () => {
+        updateFetchMethodHint();
+        updateProxyVisibility();
+    });
+
     // Auto-refresh cache stats every 30 seconds
     cacheRefreshInterval = setInterval(() => {
         loadCacheStats();
         loadTorrents();
     }, 30000);
+
+    // Check if relay should be active (after config and addons load)
+    setTimeout(checkRelayNeeded, 2000);
 });
+
+// ---------------------------------------------------------------------------
+// Fetch Method Helpers
+// ---------------------------------------------------------------------------
+
+function updateFetchMethodHint() {
+    const method = document.getElementById('fetch-method-select').value;
+    const hintEl = document.getElementById('fetch-method-hint');
+    hintEl.textContent = fetchMethodHints[method] || '';
+}
+
+function updateProxyVisibility() {
+    const method = document.getElementById('fetch-method-select').value;
+    const proxyGroup = document.getElementById('proxy-url-group');
+    proxyGroup.style.display = method === 'proxy' ? 'block' : 'none';
+}
+
+// ---------------------------------------------------------------------------
+// Browser Tab Relay
+// ---------------------------------------------------------------------------
+
+// Check if any addon uses tab_relay (directly or via global default)
+async function checkRelayNeeded() {
+    try {
+        const [configResp, addonsResp] = await Promise.all([
+            fetch('/api/config'),
+            fetch('/api/addons'),
+        ]);
+        if (!configResp.ok || !addonsResp.ok) return;
+
+        const config = await configResp.json();
+        const addons = await addonsResp.json();
+
+        const globalMethod = config.defaultFetchMethod || 'sw_fallback';
+
+        // Relay is needed if any addon's effective method is tab_relay,
+        // OR if sw_fallback is active and any addon exists (relay used as fallback).
+        let needRelay = false;
+        if (addons && addons.length > 0) {
+            for (const addon of addons) {
+                const effective = (addon.fetchMethod === 'global' || !addon.fetchMethod)
+                    ? globalMethod
+                    : addon.fetchMethod;
+                if (effective === 'tab_relay' || effective === 'sw_fallback') {
+                    needRelay = true;
+                    break;
+                }
+            }
+        }
+
+        if (needRelay && !relayActive) {
+            startRelay();
+        } else if (!needRelay && relayActive) {
+            stopRelay();
+        }
+    } catch (e) {
+        console.error('Failed to check relay status:', e);
+    }
+}
+
+function startRelay() {
+    if (relayActive) return;
+    relayActive = true;
+
+    const section = document.getElementById('relay-section');
+    section.style.display = 'block';
+    updateRelayUI(true);
+
+    relayPollLoop();
+}
+
+function stopRelay() {
+    relayActive = false;
+    if (relayAbortController) {
+        relayAbortController.abort();
+        relayAbortController = null;
+    }
+
+    const section = document.getElementById('relay-section');
+    section.style.display = 'none';
+}
+
+function updateRelayUI(connected) {
+    const section = document.getElementById('relay-section');
+    const label = document.getElementById('relay-label');
+
+    if (connected) {
+        section.classList.remove('relay-disconnected');
+        label.textContent = 'Relay Active';
+    } else {
+        section.classList.add('relay-disconnected');
+        label.textContent = 'Relay Disconnected';
+    }
+}
+
+async function relayPollLoop() {
+    while (relayActive) {
+        try {
+            relayAbortController = new AbortController();
+            const response = await fetch('/api/relay/pending', {
+                signal: relayAbortController.signal,
+            });
+
+            updateRelayUI(true);
+
+            if (response.status === 204) {
+                // No pending request, loop again immediately
+                continue;
+            }
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const request = await response.json();
+            // Process the relay request in the background
+            processRelayRequest(request);
+        } catch (e) {
+            if (e.name === 'AbortError') {
+                break; // Relay was stopped
+            }
+            console.error('Relay poll error:', e);
+            updateRelayUI(false);
+            // Wait before retrying on error
+            await new Promise(r => setTimeout(r, 3000));
+        }
+    }
+}
+
+async function processRelayRequest(request) {
+    const { id, url } = request;
+
+    try {
+        const response = await fetch(url);
+        const body = await response.text();
+
+        await fetch(`/api/relay/response/${id}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                statusCode: response.status,
+                body: body,
+            }),
+        });
+    } catch (e) {
+        console.error(`Relay fetch failed for ${url}:`, e);
+        // Report the error back to the server
+        try {
+            await fetch(`/api/relay/response/${id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    statusCode: 0,
+                    body: '',
+                    error: e.message,
+                }),
+            });
+        } catch (e2) {
+            console.error('Failed to report relay error:', e2);
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Config & Engine Status
@@ -29,8 +214,14 @@ async function loadConfig() {
 
         // Populate form fields
         document.getElementById('engine-select').value = config.defaultEngine || 'torrserver';
+        document.getElementById('fetch-method-select').value = config.defaultFetchMethod || 'sw_fallback';
+        document.getElementById('proxy-url').value = config.proxyURL || '';
         document.getElementById('cache-size').value = config.cacheSizeGB || 50;
         document.getElementById('cache-age').value = config.cacheMaxAgeDays || 30;
+
+        // Update hints and visibility
+        updateFetchMethodHint();
+        updateProxyVisibility();
 
         // Show engine status
         const statusEl = document.getElementById('engine-status');
@@ -71,6 +262,8 @@ async function saveConfig() {
 
     const config = {
         defaultEngine: document.getElementById('engine-select').value,
+        defaultFetchMethod: document.getElementById('fetch-method-select').value,
+        proxyURL: document.getElementById('proxy-url').value.trim(),
         cacheSizeGB: parseInt(document.getElementById('cache-size').value, 10),
         cacheMaxAgeDays: parseInt(document.getElementById('cache-age').value, 10),
     };
@@ -83,6 +276,11 @@ async function saveConfig() {
 
     if (config.cacheMaxAgeDays < 1 || config.cacheMaxAgeDays > 365) {
         showStatus(statusEl, 'Cache age must be between 1 and 365 days', true);
+        return;
+    }
+
+    if (config.defaultFetchMethod === 'proxy' && !config.proxyURL) {
+        showStatus(statusEl, 'Proxy URL is required when using Custom Proxy method', true);
         return;
     }
 
@@ -109,6 +307,9 @@ async function saveConfig() {
 
         // Reload config to refresh engine status
         loadConfig();
+
+        // Re-check if relay is needed with new settings
+        setTimeout(checkRelayNeeded, 500);
     } catch (error) {
         console.error('Failed to save config:', error);
         showStatus(statusEl, `Failed to save: ${error.message}`, true);
@@ -121,6 +322,16 @@ async function saveConfig() {
 // ---------------------------------------------------------------------------
 // Addons
 // ---------------------------------------------------------------------------
+
+// Fetch method labels for display
+const fetchMethodLabels = {
+    global: 'Use Global',
+    sw_fallback: 'SW + Fallback',
+    tab_relay: 'Tab Relay',
+    sw_only: 'SW Only',
+    direct: 'PCS-IP Only',
+    proxy: 'Custom Proxy',
+};
 
 // Load addons list from API
 async function loadAddons() {
@@ -149,14 +360,35 @@ async function loadAddons() {
             // Use wrappedUrl directly from API
             const wrappedURL = addon.wrappedUrl || '';
 
+            // Fetch status indicator
+            const statusClass = addon.fetchStatus === 'ok' ? 'fetch-ok'
+                : addon.fetchStatus === 'blocked' ? 'fetch-blocked'
+                : 'fetch-unknown';
+            const statusLabel = addon.fetchStatus === 'ok' ? 'OK'
+                : addon.fetchStatus === 'blocked' ? 'Blocked'
+                : '?';
+
+            // Build fetch method options
+            const currentMethod = addon.fetchMethod || 'global';
+            const methodOptions = Object.entries(fetchMethodLabels).map(([value, label]) => {
+                const selected = value === currentMethod ? 'selected' : '';
+                return `<option value="${value}" ${selected}>${escapeHtml(label)}</option>`;
+            }).join('');
+
             return `
                 <div class="addon-item">
                     <div class="addon-header">
-                        <div>
-                            <div class="addon-name">${escapeHtml(displayName)}</div>
-                            <div class="addon-url" title="${escapeHtml(originalUrl)}">${escapeHtml(truncatedURL)}</div>
+                        <div class="addon-header-left">
+                            <span class="fetch-status ${statusClass}" title="Fetch status: ${statusLabel}">${statusLabel}</span>
+                            <div>
+                                <div class="addon-name">${escapeHtml(displayName)}</div>
+                                <div class="addon-url" title="${escapeHtml(originalUrl)}">${escapeHtml(truncatedURL)}</div>
+                            </div>
                         </div>
                         <div class="addon-actions">
+                            <select class="addon-fetch-select" onchange="updateAddonFetchMethod('${escapeHtml(addon.id)}', this.value)">
+                                ${methodOptions}
+                            </select>
                             <button class="small danger" onclick="removeAddon('${escapeHtml(addon.id)}')">Remove</button>
                         </div>
                     </div>
@@ -257,6 +489,32 @@ async function removeAddon(id) {
     } catch (error) {
         console.error('Failed to remove addon:', error);
         alert(`Failed to remove addon: ${error.message}`);
+    }
+}
+
+// Update per-addon fetch method
+async function updateAddonFetchMethod(id, method) {
+    try {
+        const response = await fetch(`/api/addons/${id}`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ fetchMethod: method }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+
+        // Re-check if relay is needed with the new per-addon setting
+        setTimeout(checkRelayNeeded, 500);
+    } catch (error) {
+        console.error('Failed to update addon fetch method:', error);
+        alert(`Failed to update: ${error.message}`);
+        // Reload to reset the select to the correct value
+        loadAddons();
     }
 }
 
