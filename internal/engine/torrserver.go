@@ -37,9 +37,15 @@ type torrServerRequest struct {
 
 // torrServerTorrent represents a torrent in TorrServer's API response
 type torrServerTorrent struct {
-	Hash     string                  `json:"hash"`
-	Name     string                  `json:"name"`
-	FileStat []torrServerFileStat    `json:"file_stat"`
+	Hash             string               `json:"hash"`
+	Name             string               `json:"name"`
+	FileStat         []torrServerFileStat  `json:"file_stat"`
+	TorrentSize      int64                `json:"torrent_size"`
+	DownloadSpeed    float64              `json:"download_speed"`
+	UploadSpeed      float64              `json:"upload_speed"`
+	ActivePeers      int                  `json:"active_peers"`
+	TotalPeers       int                  `json:"total_peers"`
+	ConnectedSeeders int                  `json:"connected_seeders"`
 }
 
 // torrServerFileStat represents a file entry in TorrServer's response
@@ -235,18 +241,40 @@ func (t *TorrServerAdapter) doTorrentsRequest(ctx context.Context, reqBody torrS
 // torrentInfoFromTorrServer converts a TorrServer response to our TorrentInfo type
 func torrentInfoFromTorrServer(ts *torrServerTorrent) *TorrentInfo {
 	files := make([]TorrentFile, 0, len(ts.FileStat))
+	var filesSize int64
 	for _, f := range ts.FileStat {
 		files = append(files, TorrentFile{
 			Index: f.ID,
 			Path:  f.Path,
 			Size:  f.Length,
 		})
+		filesSize += f.Length
 	}
 
-	return &TorrentInfo{
-		InfoHash: strings.ToLower(ts.Hash),
-		Name:     ts.Name,
-		Files:    files,
-		EngineID: strings.ToLower(ts.Hash),
+	// Prefer engine-reported total size; fall back to sum of files.
+	totalSize := ts.TorrentSize
+	if totalSize == 0 {
+		totalSize = filesSize
 	}
+
+	info := &TorrentInfo{
+		InfoHash:  strings.ToLower(ts.Hash),
+		Name:      ts.Name,
+		Files:     files,
+		EngineID:  strings.ToLower(ts.Hash),
+		TotalSize: totalSize,
+	}
+
+	// Attach live stats if any are non-zero (indicates an active torrent).
+	if ts.ActivePeers > 0 || ts.DownloadSpeed > 0 || ts.TotalPeers > 0 {
+		info.Stats = &TorrentStats{
+			DownloadSpeed:    ts.DownloadSpeed,
+			UploadSpeed:      ts.UploadSpeed,
+			ActivePeers:      ts.ActivePeers,
+			TotalPeers:       ts.TotalPeers,
+			ConnectedSeeders: ts.ConnectedSeeders,
+		}
+	}
+
+	return info
 }

@@ -440,6 +440,71 @@ button.small {
 }
 
 /* ---------------------------------------------------------------------------
+   Live Torrent Stats
+--------------------------------------------------------------------------- */
+
+.live-total-speed {
+    font-size: 0.85rem;
+    color: #4ec9b0;
+    font-weight: 600;
+}
+
+.live-torrent {
+    padding: 12px 15px;
+    background: #0f3460;
+    border: 1px solid #1a4d7a;
+    border-radius: 6px;
+    margin-bottom: 10px;
+}
+
+.live-torrent:last-child {
+    margin-bottom: 0;
+}
+
+.live-torrent-name {
+    font-weight: 600;
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.live-torrent-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.live-stat {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.85rem;
+}
+
+.live-stat-label {
+    color: #888;
+}
+
+.live-stat-value {
+    font-weight: 600;
+    color: #eee;
+}
+
+.live-stat-value.speed {
+    color: #4ec9b0;
+}
+
+.live-stat-value.peers {
+    color: #f0a500;
+}
+
+.live-stat-value.seeders {
+    color: #4ec9b0;
+}
+
+/* ---------------------------------------------------------------------------
    Torrents Table
 --------------------------------------------------------------------------- */
 

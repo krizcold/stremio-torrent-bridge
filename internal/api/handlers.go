@@ -412,6 +412,57 @@ func (h *Handlers) HandleRemoveTorrent(c *fiber.Ctx) {
 	c.SendString(`{"success":true}`)
 }
 
+// --- live torrent stats endpoints --------------------------------------------
+
+// torrentStatsItem is a single torrent's live stats for the API response.
+type torrentStatsItem struct {
+	InfoHash         string  `json:"infoHash"`
+	Name             string  `json:"name"`
+	TotalSize        int64   `json:"totalSize"`
+	DownloadSpeed    float64 `json:"downloadSpeed"`
+	UploadSpeed      float64 `json:"uploadSpeed"`
+	ActivePeers      int     `json:"activePeers"`
+	TotalPeers       int     `json:"totalPeers"`
+	ConnectedSeeders int     `json:"connectedSeeders"`
+}
+
+// HandleTorrentStats handles GET /api/torrents/stats.
+// Returns live stats for all torrents from the engine (peers, speed, size).
+func (h *Handlers) HandleTorrentStats(c *fiber.Ctx) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	torrents, err := h.engine.ListTorrents(ctx)
+	if err != nil {
+		c.Status(http.StatusServiceUnavailable)
+		c.Set("Content-Type", "application/json")
+		errJSON, _ := json.Marshal(map[string]string{"error": err.Error()})
+		c.Send(errJSON)
+		return
+	}
+
+	items := make([]torrentStatsItem, 0, len(torrents))
+	for _, t := range torrents {
+		item := torrentStatsItem{
+			InfoHash:  t.InfoHash,
+			Name:      t.Name,
+			TotalSize: t.TotalSize,
+		}
+		if t.Stats != nil {
+			item.DownloadSpeed = t.Stats.DownloadSpeed
+			item.UploadSpeed = t.Stats.UploadSpeed
+			item.ActivePeers = t.Stats.ActivePeers
+			item.TotalPeers = t.Stats.TotalPeers
+			item.ConnectedSeeders = t.Stats.ConnectedSeeders
+		}
+		items = append(items, item)
+	}
+
+	out, _ := json.Marshal(items)
+	c.Set("Content-Type", "application/json")
+	c.Send(out)
+}
+
 // --- service worker endpoints ------------------------------------------------
 
 // swConfigResponse is the JSON returned to the Service Worker so it knows

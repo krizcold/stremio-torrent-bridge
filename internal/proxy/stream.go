@@ -109,11 +109,7 @@ func (sp *StreamProxy) HandleStream(c *fiber.Ctx) {
 		go func() {
 			info, err := sp.engine.GetTorrent(context.Background(), infoHash)
 			if err == nil && info != nil {
-				var totalSize int64
-				for _, f := range info.Files {
-					totalSize += f.Size
-				}
-				sp.cacheManager.RecordAccess(infoHash, info.Name, totalSize)
+				sp.cacheManager.RecordAccess(infoHash, info.Name, info.TotalSize)
 			} else {
 				// Still record the access even without full info.
 				sp.cacheManager.RecordAccess(infoHash, "", 0)

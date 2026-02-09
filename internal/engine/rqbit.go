@@ -445,11 +445,17 @@ func (r *RqbitAdapter) getTorrentByID(ctx context.Context, id int, knownHash str
 		})
 	}
 
+	var totalSize int64
+	for _, f := range files {
+		totalSize += f.Size
+	}
+
 	return &TorrentInfo{
-		InfoHash: hash,
-		Name:     detail.Name,
-		Files:    files,
-		EngineID: strconv.Itoa(id),
+		InfoHash:  hash,
+		Name:      detail.Name,
+		Files:     files,
+		EngineID:  strconv.Itoa(id),
+		TotalSize: totalSize,
 	}, nil
 }
 
@@ -478,11 +484,17 @@ func (r *RqbitAdapter) torrentDetailsToInfoSlice(details []rqbitTorrentDetail) [
 			engineID = strconv.Itoa(id)
 		}
 
+		var totalSize int64
+		for _, f := range files {
+			totalSize += f.Size
+		}
+
 		result = append(result, TorrentInfo{
-			InfoHash: hash,
-			Name:     d.Name,
-			Files:    files,
-			EngineID: engineID,
+			InfoHash:  hash,
+			Name:      d.Name,
+			Files:     files,
+			EngineID:  engineID,
+			TotalSize: totalSize,
 		})
 	}
 	return result

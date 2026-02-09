@@ -1,5 +1,6 @@
-// Auto-refresh interval handle
+// Auto-refresh interval handles
 let cacheRefreshInterval = null;
+let liveStatsInterval = null;
 
 // Relay state
 let relayActive = false;
@@ -19,7 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadConfig();
     loadAddons();
     loadCacheStats();
-    loadTorrents();
+    loadLiveStats();
 
     // Fetch method dropdown change handler
     const fetchMethodSelect = document.getElementById('fetch-method-select');
@@ -29,10 +30,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Auto-refresh cache stats every 30 seconds
-    cacheRefreshInterval = setInterval(() => {
-        loadCacheStats();
-        loadTorrents();
-    }, 30000);
+    cacheRefreshInterval = setInterval(loadCacheStats, 30000);
+
+    // Live torrent stats every 3 seconds
+    liveStatsInterval = setInterval(loadLiveStats, 3000);
 
     // Check if relay should be active (after config and addons load)
     setTimeout(checkRelayNeeded, 2000);
@@ -611,73 +612,91 @@ async function cleanupCache() {
 }
 
 // ---------------------------------------------------------------------------
-// Active Torrents
+// Live Torrent Stats
 // ---------------------------------------------------------------------------
 
-// Load cached torrents list
-async function loadTorrents() {
-    const listEl = document.getElementById('torrents-list');
+// Load live torrent stats from engine (peers, speed, etc.)
+async function loadLiveStats() {
+    const listEl = document.getElementById('live-stats');
+    const totalSpeedEl = document.getElementById('total-speed');
 
     try {
-        const response = await fetch('/api/cache/stats');
+        const response = await fetch('/api/torrents/stats');
         if (!response.ok) {
-            if (response.status === 404) {
-                listEl.innerHTML = '<div class="empty-state">Torrent list unavailable (API not implemented yet)</div>';
+            if (response.status === 404 || response.status === 503) {
+                listEl.innerHTML = '<div class="empty-state">Engine stats unavailable</div>';
+                totalSpeedEl.textContent = '';
                 return;
             }
             throw new Error(`HTTP ${response.status}`);
         }
 
-        const stats = await response.json();
-        const torrents = stats.torrents || [];
+        const torrents = await response.json();
 
-        if (torrents.length === 0) {
-            listEl.innerHTML = '<div class="empty-state">No cached torrents</div>';
+        if (!torrents || torrents.length === 0) {
+            listEl.innerHTML = '<div class="empty-state">No active torrents</div>';
+            totalSpeedEl.textContent = '';
             return;
         }
 
-        // Sort by last accessed, most recent first
-        torrents.sort((a, b) => {
-            const dateA = a.lastAccessed ? new Date(a.lastAccessed).getTime() : 0;
-            const dateB = b.lastAccessed ? new Date(b.lastAccessed).getTime() : 0;
-            return dateB - dateA;
-        });
-
-        let tableHTML = `
-            <div class="torrents-table-wrapper">
-                <table class="torrents-table">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Size</th>
-                            <th>Last Accessed</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-        `;
-
-        for (const torrent of torrents) {
-            const name = torrent.name || torrent.infoHash || 'Unknown';
-            const truncatedName = name.length > 50 ? name.substring(0, 47) + '...' : name;
-
-            tableHTML += `
-                <tr>
-                    <td title="${escapeHtml(name)}">${escapeHtml(truncatedName)}</td>
-                    <td class="nowrap">${formatBytes(torrent.size || 0)}</td>
-                    <td class="nowrap">${torrent.lastAccessed ? timeAgo(torrent.lastAccessed) : 'N/A'}</td>
-                    <td>
-                        <button class="small danger" onclick="removeTorrent('${escapeHtml(torrent.infoHash)}')">Remove</button>
-                    </td>
-                </tr>
-            `;
+        // Calculate totals
+        let totalDown = 0;
+        let totalUp = 0;
+        let totalPeers = 0;
+        for (const t of torrents) {
+            totalDown += t.downloadSpeed || 0;
+            totalUp += t.uploadSpeed || 0;
+            totalPeers += t.activePeers || 0;
         }
 
-        tableHTML += '</tbody></table></div>';
-        listEl.innerHTML = tableHTML;
+        totalSpeedEl.innerHTML = totalPeers > 0
+            ? `${totalPeers} peers | ${formatSpeed(totalDown)} down | ${formatSpeed(totalUp)} up`
+            : '';
+
+        // Sort: torrents with active stats first, then by download speed
+        torrents.sort((a, b) => {
+            const aActive = (a.activePeers || 0) + (a.downloadSpeed || 0);
+            const bActive = (b.activePeers || 0) + (b.downloadSpeed || 0);
+            return bActive - aActive;
+        });
+
+        listEl.innerHTML = torrents.map(t => {
+            const name = t.name || t.infoHash || 'Unknown';
+            const truncName = name.length > 60 ? name.substring(0, 57) + '...' : name;
+            const hasStats = (t.activePeers || 0) > 0 || (t.downloadSpeed || 0) > 0;
+
+            return `
+                <div class="live-torrent">
+                    <div class="live-torrent-name" title="${escapeHtml(name)}">${escapeHtml(truncName)}</div>
+                    <div class="live-torrent-stats">
+                        <div class="live-stat">
+                            <span class="live-stat-label">Peers:</span>
+                            <span class="live-stat-value peers">${t.activePeers || 0} / ${t.totalPeers || 0}</span>
+                        </div>
+                        <div class="live-stat">
+                            <span class="live-stat-label">Seeders:</span>
+                            <span class="live-stat-value seeders">${t.connectedSeeders || 0}</span>
+                        </div>
+                        <div class="live-stat">
+                            <span class="live-stat-label">DL:</span>
+                            <span class="live-stat-value speed">${formatSpeed(t.downloadSpeed || 0)}</span>
+                        </div>
+                        <div class="live-stat">
+                            <span class="live-stat-label">UL:</span>
+                            <span class="live-stat-value speed">${formatSpeed(t.uploadSpeed || 0)}</span>
+                        </div>
+                        <div class="live-stat">
+                            <span class="live-stat-label">Size:</span>
+                            <span class="live-stat-value">${formatBytes(t.totalSize || 0)}</span>
+                        </div>
+                        ${!hasStats ? '<div class="live-stat"><span class="live-stat-label">(idle)</span></div>' : ''}
+                    </div>
+                </div>
+            `;
+        }).join('');
     } catch (error) {
-        console.error('Failed to load torrents:', error);
-        listEl.innerHTML = '<div class="empty-state">Torrent list unavailable</div>';
+        console.error('Failed to load live stats:', error);
+        listEl.innerHTML = '<div class="empty-state">Engine stats unavailable</div>';
     }
 }
 
@@ -701,9 +720,9 @@ async function removeTorrent(infoHash) {
             throw new Error(errorData.error || `HTTP ${response.status}`);
         }
 
-        // Refresh both sections
+        // Refresh stats
         loadCacheStats();
-        loadTorrents();
+        loadLiveStats();
     } catch (error) {
         console.error('Failed to remove torrent:', error);
         alert(`Failed to remove torrent: ${error.message}`);
@@ -738,6 +757,15 @@ async function copyToClipboard(text) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// Format bytes/sec to human-readable speed string
+function formatSpeed(bytesPerSec) {
+    if (bytesPerSec === 0) return '0 B/s';
+    const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+    const k = 1024;
+    const i = Math.min(Math.floor(Math.log(bytesPerSec) / Math.log(k)), units.length - 1);
+    return (bytesPerSec / Math.pow(k, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+}
 
 // Format bytes to human-readable string (KB, MB, GB)
 function formatBytes(bytes) {

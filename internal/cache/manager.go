@@ -161,16 +161,19 @@ func (cm *CacheManager) syncWithEngine() error {
 
 	// Add entries for torrents the engine has but we don't track yet.
 	for hash, t := range engineHashes {
-		if _, exists := cm.accessLog[hash]; !exists {
-			var totalSize int64
-			for _, f := range t.Files {
-				totalSize += f.Size
-			}
+		entry, exists := cm.accessLog[hash]
+		if !exists {
 			cm.accessLog[hash] = &AccessEntry{
 				InfoHash:     hash,
 				Name:         t.Name,
 				LastAccessed: time.Now(),
-				Size:         totalSize,
+				Size:         t.TotalSize,
+			}
+		} else if entry.Size == 0 && t.TotalSize > 0 {
+			// Update size if it was previously unknown (metadata wasn't ready).
+			entry.Size = t.TotalSize
+			if entry.Name == "" && t.Name != "" {
+				entry.Name = t.Name
 			}
 		}
 	}

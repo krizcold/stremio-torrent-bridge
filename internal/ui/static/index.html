@@ -82,6 +82,15 @@
             <div id="config-status" class="status"></div>
         </section>
 
+        <!-- Live Torrent Stats -->
+        <section class="card" id="live-stats-section">
+            <div class="section-header">
+                <h2>Active Torrents</h2>
+                <div class="live-total-speed" id="total-speed"></div>
+            </div>
+            <div id="live-stats">No active torrents</div>
+        </section>
+
         <!-- Cache Stats -->
         <section class="card" id="cache-section">
             <div class="section-header">
@@ -89,15 +98,6 @@
                 <button class="small" onclick="loadCacheStats()">Refresh</button>
             </div>
             <div id="cache-stats">Loading...</div>
-        </section>
-
-        <!-- Active Torrents -->
-        <section class="card" id="torrents-section">
-            <div class="section-header">
-                <h2>Cached Torrents</h2>
-                <button class="small" onclick="loadTorrents()">Refresh</button>
-            </div>
-            <div id="torrents-list">Loading...</div>
         </section>
     </div>
     <script src="/ui/app.js"></script>

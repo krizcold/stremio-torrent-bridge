@@ -578,11 +578,19 @@ func torrentInfoFromQBittorrent(t *qbitTorrentInfo, files []qbitFileInfo) *Torre
 		})
 	}
 
+	totalSize := t.Size
+	if totalSize == 0 {
+		for _, f := range files {
+			totalSize += f.Size
+		}
+	}
+
 	return &TorrentInfo{
-		InfoHash: strings.ToLower(t.Hash),
-		Name:     t.Name,
-		Files:    torrentFiles,
-		EngineID: strings.ToLower(t.Hash),
+		InfoHash:  strings.ToLower(t.Hash),
+		Name:      t.Name,
+		Files:     torrentFiles,
+		EngineID:  strings.ToLower(t.Hash),
+		TotalSize: totalSize,
 	}
 }
 

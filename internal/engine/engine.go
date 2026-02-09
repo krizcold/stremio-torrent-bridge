@@ -30,12 +30,23 @@ func ParseInfoHashFromMagnet(magnetURI string) string {
 	return strings.ToLower(parts[2])
 }
 
+// TorrentStats holds live runtime statistics for an active torrent.
+type TorrentStats struct {
+	DownloadSpeed    float64 `json:"downloadSpeed"`    // bytes/sec
+	UploadSpeed      float64 `json:"uploadSpeed"`      // bytes/sec
+	ActivePeers      int     `json:"activePeers"`
+	TotalPeers       int     `json:"totalPeers"`
+	ConnectedSeeders int     `json:"connectedSeeders"`
+}
+
 // TorrentInfo holds metadata about an added torrent
 type TorrentInfo struct {
-	InfoHash string        `json:"infoHash"`
-	Name     string        `json:"name"`
-	Files    []TorrentFile `json:"files"`
-	EngineID string        `json:"engineId"` // Internal engine ID (rqbit uses numeric IDs)
+	InfoHash  string        `json:"infoHash"`
+	Name      string        `json:"name"`
+	Files     []TorrentFile `json:"files"`
+	EngineID  string        `json:"engineId"`  // Internal engine ID (rqbit uses numeric IDs)
+	TotalSize int64         `json:"totalSize"` // Total size in bytes (from engine metadata)
+	Stats     *TorrentStats `json:"stats,omitempty"`
 }
 
 // TorrentFile represents a single file within a torrent

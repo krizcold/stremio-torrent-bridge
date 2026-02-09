@@ -44,6 +44,10 @@ func RegisterRoutes(router AddonRouter, h *Handlers, w *addonpkg.Wrapper, sp *pr
 	router.AddEndpoint("POST", "/api/cache/cleanup", h.HandleCacheCleanup)
 	router.AddEndpoint("DELETE", "/api/cache/torrents/:hash", h.HandleRemoveTorrent)
 
+	// --- Live torrent stats routes -------------------------------------------
+
+	router.AddEndpoint("GET", "/api/torrents/stats", h.HandleTorrentStats)
+
 	// --- Stremio wrap routes (addon protocol) --------------------------------
 	// Registered as middleware so they run BEFORE go-stremio's built-in route
 	// handlers, which would otherwise intercept paths containing manifest.json,
