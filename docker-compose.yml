@@ -46,8 +46,8 @@ services:
       CACHE_MAX_AGE_DAYS: "${CACHE_MAX_AGE_DAYS:-7}"
       TZ: "$TZ"
     volumes:
-      - /DATA/AppData/stremio-torrent-bridge/bridge:/data
-      - /DATA/AppData/stremio-torrent-bridge/qbittorrent/downloads:/downloads:ro
+      - /DATA/AppData/stremiotorrentbridge/bridge:/data
+      - /DATA/AppData/stremiotorrentbridge/qbittorrent/downloads:/downloads:ro
     depends_on:
       - torrserver
     networks:
@@ -80,8 +80,8 @@ services:
       TS_DONTKILL: "1"
       TS_HTTPAUTH: "0"
     volumes:
-      - /DATA/AppData/stremio-torrent-bridge/torrserver/config:/opt/ts/config
-      - /DATA/AppData/stremio-torrent-bridge/torrserver/cache:/opt/ts/torrents
+      - /DATA/AppData/stremiotorrentbridge/torrserver/config:/opt/ts/config
+      - /DATA/AppData/stremiotorrentbridge/torrserver/cache:/opt/ts/torrents
     networks:
       - internal
 
@@ -93,8 +93,8 @@ services:
     cpu_shares: 50
     command: server start /downloads
     volumes:
-      - /DATA/AppData/stremio-torrent-bridge/rqbit/downloads:/downloads
-      - /DATA/AppData/stremio-torrent-bridge/rqbit/config:/root/.config/rqbit
+      - /DATA/AppData/stremiotorrentbridge/rqbit/downloads:/downloads
+      - /DATA/AppData/stremiotorrentbridge/rqbit/config:/root/.config/rqbit
     networks:
       - internal
 
@@ -110,8 +110,8 @@ services:
       TZ: "$TZ"
       WEBUI_PORT: "8080"
     volumes:
-      - /DATA/AppData/stremio-torrent-bridge/qbittorrent/config:/config
-      - /DATA/AppData/stremio-torrent-bridge/qbittorrent/downloads:/downloads
+      - /DATA/AppData/stremiotorrentbridge/qbittorrent/config:/config
+      - /DATA/AppData/stremiotorrentbridge/qbittorrent/downloads:/downloads
     networks:
       - internal
 
