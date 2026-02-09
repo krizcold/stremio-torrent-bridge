@@ -114,11 +114,15 @@ func wrapMiddleware(w *addonpkg.Wrapper) func(*fiber.Ctx) {
 			return
 		}
 
-		// CORS headers for Stremio Web (go-stremio adds these for its own
-		// routes, but our middleware short-circuits before those run).
+		// CORS headers for Stremio Web. go-stremio's global CORS middleware
+		// may set Vary: Origin before we run, which causes browsers to cache
+		// responses per-Origin. Since we always return "*", override Vary to
+		// prevent stale CORS failures from being cached.
 		c.Set("Access-Control-Allow-Origin", "*")
 		c.Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 		c.Set("Access-Control-Allow-Headers", "Content-Type")
+		c.Set("Vary", "")
+		c.Set("Cache-Control", "no-cache")
 
 		if c.Method() == "OPTIONS" {
 			c.Status(204)
@@ -194,10 +198,12 @@ func streamProxyMiddleware(sp *proxy.StreamProxy) func(*fiber.Ctx) {
 			return
 		}
 
-		// CORS headers for Stremio Web.
+		// CORS headers for Stremio Web (see wrapMiddleware for rationale).
 		c.Set("Access-Control-Allow-Origin", "*")
 		c.Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 		c.Set("Access-Control-Allow-Headers", "Content-Type, Range")
+		c.Set("Vary", "")
+		c.Set("Cache-Control", "no-cache")
 
 		if c.Method() == "OPTIONS" {
 			c.Status(204)
