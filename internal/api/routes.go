@@ -101,17 +101,27 @@ func RegisterRoutes(router AddonRouter, h *Handlers, w *addonpkg.Wrapper, sp *pr
 // handling them.
 func wrapMiddleware(w *addonpkg.Wrapper) func(*fiber.Ctx) {
 	return func(c *fiber.Ctx) {
-		if c.Method() != "GET" {
+		path := c.Path()
+
+		// Only handle /wrap/ paths.
+		rest := strings.TrimPrefix(path, "/wrap/")
+		if rest == path {
 			c.Next()
 			return
 		}
 
-		path := c.Path()
+		// CORS headers for Stremio Web (go-stremio adds these for its own
+		// routes, but our middleware short-circuits before those run).
+		c.Set("Access-Control-Allow-Origin", "*")
+		c.Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		c.Set("Access-Control-Allow-Headers", "Content-Type")
 
-		// Strip the /wrap/ prefix to get: {wrapId}/manifest.json, etc.
-		rest := strings.TrimPrefix(path, "/wrap/")
-		if rest == path {
-			// Didn't start with /wrap/
+		if c.Method() == "OPTIONS" {
+			c.Status(204)
+			return
+		}
+
+		if c.Method() != "GET" {
 			c.Next()
 			return
 		}
@@ -173,14 +183,24 @@ func wrapMiddleware(w *addonpkg.Wrapper) func(*fiber.Ctx) {
 // (no .json suffix) and prevents go-stremio from catching these.
 func streamProxyMiddleware(sp *proxy.StreamProxy) func(*fiber.Ctx) {
 	return func(c *fiber.Ctx) {
-		if c.Method() != "GET" {
+		path := c.Path()
+		rest := strings.TrimPrefix(path, "/stream/")
+		if rest == path {
 			c.Next()
 			return
 		}
 
-		path := c.Path()
-		rest := strings.TrimPrefix(path, "/stream/")
-		if rest == path {
+		// CORS headers for Stremio Web.
+		c.Set("Access-Control-Allow-Origin", "*")
+		c.Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		c.Set("Access-Control-Allow-Headers", "Content-Type, Range")
+
+		if c.Method() == "OPTIONS" {
+			c.Status(204)
+			return
+		}
+
+		if c.Method() != "GET" {
 			c.Next()
 			return
 		}
