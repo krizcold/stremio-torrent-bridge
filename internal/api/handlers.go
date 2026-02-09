@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -108,6 +109,11 @@ func (h *Handlers) HandleAddAddon(c *fiber.Ctx) {
 		c.Set("Content-Type", "application/json")
 		c.SendString(`{"error":"failed to add addon"}`)
 		return
+	}
+
+	// Best-effort: fetch the manifest to populate the addon name immediately.
+	if wrapped.Name == "" {
+		go h.fetchAddonName(wrapped.ID, req.ManifestURL)
 	}
 
 	externalBase := resolveExternalURL(h.config, c)
@@ -453,6 +459,41 @@ func (h *Handlers) HandleSWConfig(c *fiber.Ctx) {
 	c.Set("Cache-Control", "no-cache")
 	c.Set("Access-Control-Allow-Origin", "*")
 	c.Send(out)
+}
+
+// fetchAddonName fetches a manifest URL and extracts the "name" field to
+// update the addon store. Best-effort; failures are silently logged.
+func (h *Handlers) fetchAddonName(addonID, manifestURL string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
+	if err != nil {
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Printf("handlers: fetch addon name from %s: %v\n", manifestURL, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var manifest struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+		return
+	}
+
+	if manifest.Name != "" {
+		if err := h.store.UpdateName(addonID, manifest.Name); err != nil {
+			fmt.Printf("handlers: update addon name for %s: %v\n", addonID, err)
+		}
+	}
 }
 
 // --- helpers -----------------------------------------------------------------

@@ -351,7 +351,7 @@ async function loadAddons() {
 
         // Render addon list
         listEl.innerHTML = addons.map(addon => {
-            const displayName = addon.name || 'Loading...';
+            const displayName = addon.name || extractAddonLabel(addon.originalUrl);
             const originalUrl = addon.originalUrl || '';
             const truncatedURL = originalUrl.length > 60
                 ? originalUrl.substring(0, 57) + '...'
@@ -786,6 +786,18 @@ function showStatus(element, message, isError) {
     setTimeout(() => {
         element.classList.remove('visible');
     }, 3000);
+}
+
+// Extract a short label from an addon URL (domain or last path segment)
+function extractAddonLabel(url) {
+    try {
+        const u = new URL(url);
+        // Use hostname without TLD, e.g. "torrentio.strem.fun" -> "torrentio"
+        const parts = u.hostname.split('.');
+        return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+    } catch {
+        return 'Unknown addon';
+    }
 }
 
 // Escape HTML to prevent XSS
