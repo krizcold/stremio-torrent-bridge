@@ -440,6 +440,110 @@ button.small {
 }
 
 /* ---------------------------------------------------------------------------
+   Health Check
+--------------------------------------------------------------------------- */
+
+.health-item {
+    padding: 15px;
+    background: #0f3460;
+    border: 1px solid #1a4d7a;
+    border-radius: 6px;
+    margin-bottom: 10px;
+}
+
+.health-item:last-child {
+    margin-bottom: 0;
+}
+
+.health-item.health-ok {
+    border-color: rgba(78, 201, 176, 0.4);
+}
+
+.health-item.health-degraded {
+    border-color: rgba(240, 165, 0, 0.4);
+}
+
+.health-item.health-failing {
+    border-color: rgba(233, 69, 96, 0.4);
+}
+
+.health-name {
+    font-weight: 600;
+    font-size: 0.95rem;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.health-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 10px;
+    letter-spacing: 0.04em;
+}
+
+.health-badge.hb-ok {
+    background: rgba(78, 201, 176, 0.2);
+    color: #4ec9b0;
+    border: 1px solid rgba(78, 201, 176, 0.4);
+}
+
+.health-badge.hb-degraded {
+    background: rgba(240, 165, 0, 0.2);
+    color: #f0a500;
+    border: 1px solid rgba(240, 165, 0, 0.4);
+}
+
+.health-badge.hb-failing {
+    background: rgba(233, 69, 96, 0.2);
+    color: #e94560;
+    border: 1px solid rgba(233, 69, 96, 0.4);
+}
+
+.health-checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.health-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85rem;
+}
+
+.health-check-icon {
+    font-size: 0.75rem;
+}
+
+.health-check-icon.hc-pass {
+    color: #4ec9b0;
+}
+
+.health-check-icon.hc-fail {
+    color: #e94560;
+}
+
+.health-check-icon.hc-warn {
+    color: #f0a500;
+}
+
+.health-recommendation {
+    font-size: 0.85rem;
+    color: #f0a500;
+    margin-top: 6px;
+    padding: 8px 12px;
+    background: rgba(240, 165, 0, 0.08);
+    border-radius: 4px;
+    border-left: 3px solid #f0a500;
+}
+
+/* ---------------------------------------------------------------------------
    Live Torrent Stats
 --------------------------------------------------------------------------- */
 

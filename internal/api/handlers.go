@@ -14,6 +14,7 @@ import (
 	"github.com/krizcold/stremio-torrent-bridge/internal/cache"
 	"github.com/krizcold/stremio-torrent-bridge/internal/config"
 	"github.com/krizcold/stremio-torrent-bridge/internal/engine"
+	"github.com/krizcold/stremio-torrent-bridge/internal/relay"
 )
 
 // Handlers groups the HTTP handlers for the management REST API.
@@ -22,15 +23,19 @@ type Handlers struct {
 	config       *config.Config
 	engine       engine.Engine
 	cacheManager *cache.CacheManager // may be nil
+	wrapper      *addon.Wrapper      // for health check (manifest cache status)
+	relay        *relay.Server       // for health check (relay status)
 }
 
 // NewHandlers creates a new Handlers instance wired to the given dependencies.
-func NewHandlers(store *addon.AddonStore, cfg *config.Config, eng engine.Engine, cm *cache.CacheManager) *Handlers {
+func NewHandlers(store *addon.AddonStore, cfg *config.Config, eng engine.Engine, cm *cache.CacheManager, w *addon.Wrapper, rs *relay.Server) *Handlers {
 	return &Handlers{
 		store:        store,
 		config:       cfg,
 		engine:       eng,
 		cacheManager: cm,
+		wrapper:      w,
+		relay:        rs,
 	}
 }
 
@@ -410,6 +415,106 @@ func (h *Handlers) HandleRemoveTorrent(c *fiber.Ctx) {
 	}
 	c.Set("Content-Type", "application/json")
 	c.SendString(`{"success":true}`)
+}
+
+// --- health check endpoints --------------------------------------------------
+
+// addonHealthItem is the per-addon health status.
+type addonHealthItem struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	OriginalURL     string `json:"originalUrl"`
+	FetchMethod     string `json:"fetchMethod"`     // Per-addon setting (may be "global")
+	EffectiveMethod string `json:"effectiveMethod"` // Resolved method
+	DirectReachable bool   `json:"directReachable"` // Can the server fetch the manifest directly?
+	DirectError     string `json:"directError,omitempty"`
+	RelayConnected  bool   `json:"relayConnected"`
+	ManifestCached  bool   `json:"manifestCached"`
+	Status          string `json:"status"` // "ok", "degraded", "failing"
+	Recommendation  string `json:"recommendation,omitempty"`
+}
+
+// HandleHealthCheck handles GET /api/health.
+// Tests connectivity to each addon and returns diagnostic info.
+func (h *Handlers) HandleHealthCheck(c *fiber.Ctx) {
+	addons := h.store.List()
+
+	relayConnected := false
+	if h.relay != nil {
+		relayConnected = h.relay.Connected()
+	}
+
+	items := make([]addonHealthItem, 0, len(addons))
+	for _, a := range addons {
+		effective := a.FetchMethod
+		if effective == "" || effective == addon.FetchMethodGlobal {
+			effective = h.config.DefaultFetchMethod
+		}
+
+		cached := false
+		if h.wrapper != nil {
+			cached = h.wrapper.HasCachedManifest(a.ID)
+		}
+
+		item := addonHealthItem{
+			ID:              a.ID,
+			Name:            a.Name,
+			OriginalURL:     a.OriginalURL,
+			FetchMethod:     a.FetchMethod,
+			EffectiveMethod: effective,
+			RelayConnected:  relayConnected,
+			ManifestCached:  cached,
+		}
+
+		// Test direct fetch (with short timeout).
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, a.OriginalURL, nil)
+		if err == nil {
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				item.DirectReachable = false
+				item.DirectError = "connection failed"
+			} else {
+				resp.Body.Close()
+				if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+					item.DirectReachable = true
+				} else {
+					item.DirectReachable = false
+					item.DirectError = fmt.Sprintf("HTTP %d", resp.StatusCode)
+				}
+			}
+		} else {
+			item.DirectReachable = false
+			item.DirectError = "invalid URL"
+		}
+		cancel()
+
+		// Determine status and recommendation.
+		switch {
+		case item.DirectReachable:
+			item.Status = "ok"
+		case relayConnected || cached:
+			item.Status = "degraded"
+			if !item.DirectReachable && effective == "direct" {
+				item.Recommendation = "Direct fetch is blocked. Switch to Tab Relay or SW + Fallback."
+			} else if !relayConnected && effective == "tab_relay" {
+				item.Recommendation = "Relay disconnected. Keep this tab open or switch to Direct."
+			}
+		default:
+			item.Status = "failing"
+			if effective == "direct" || effective == "sw_fallback" {
+				item.Recommendation = "Addon is unreachable. Switch to Tab Relay and keep this tab open."
+			} else if effective == "tab_relay" {
+				item.Recommendation = "Relay disconnected. Keep this tab open while using Stremio."
+			}
+		}
+
+		items = append(items, item)
+	}
+
+	out, _ := json.Marshal(items)
+	c.Set("Content-Type", "application/json")
+	c.Send(out)
 }
 
 // --- live torrent stats endpoints --------------------------------------------

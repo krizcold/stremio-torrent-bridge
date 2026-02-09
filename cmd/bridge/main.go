@@ -55,7 +55,7 @@ func main() {
 	streamProxy := proxy.NewStreamProxy(eng, cacheManager)
 
 	// 6. Create the management REST API handlers.
-	handlers := api.NewHandlers(store, cfg, eng, cacheManager)
+	handlers := api.NewHandlers(store, cfg, eng, cacheManager, wrapper, relayServer)
 
 	// 7. Create the go-stremio addon with manifest and placeholder stream handlers.
 	//    The placeholder handlers return NotFound because the real stream handling

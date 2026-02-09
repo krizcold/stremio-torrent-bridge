@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber"
@@ -37,17 +38,21 @@ type Wrapper struct {
 	relay       *relay.Server // may be nil
 	externalURL string        // BRIDGE_EXTERNAL_URL or empty (falls back to Host header)
 	httpClient  *http.Client
+
+	manifestMu    sync.RWMutex
+	manifestCache map[string][]byte // wrapID -> last known good modified manifest JSON
 }
 
 // NewWrapper creates a Wrapper that proxies and rewrites Stremio addon responses.
 func NewWrapper(store *AddonStore, cfg *config.Config, eng engine.Engine, relayServer *relay.Server) *Wrapper {
 	return &Wrapper{
-		store:       store,
-		config:      cfg,
-		engine:      eng,
-		relay:       relayServer,
-		externalURL: strings.TrimRight(cfg.ExternalURL, "/"),
-		httpClient:  httpclient.New(),
+		store:         store,
+		config:        cfg,
+		engine:        eng,
+		relay:         relayServer,
+		externalURL:   strings.TrimRight(cfg.ExternalURL, "/"),
+		httpClient:    httpclient.New(),
+		manifestCache: make(map[string][]byte),
 	}
 }
 
@@ -70,6 +75,19 @@ func (w *Wrapper) HandleManifest(c *fiber.Ctx) {
 	data, err := w.fetchForAddon(wrapID, addon.OriginalURL)
 	if err != nil {
 		fmt.Printf("wrapper: fetch manifest from %s: %v\n", addon.OriginalURL, err)
+
+		// Serve cached manifest if available (Cloudflare may block direct fetch).
+		w.manifestMu.RLock()
+		cached := w.manifestCache[wrapID]
+		w.manifestMu.RUnlock()
+
+		if cached != nil {
+			fmt.Printf("wrapper: serving cached manifest for %s\n", wrapID)
+			c.Set("Content-Type", "application/json")
+			c.Send(cached)
+			return
+		}
+
 		c.Status(http.StatusBadGateway)
 		c.Set("Content-Type", "application/json")
 		c.SendString(`{"error":"failed to fetch original manifest"}`)
@@ -119,6 +137,12 @@ func (w *Wrapper) HandleManifest(c *fiber.Ctx) {
 		c.SendString(`{"error":"failed to encode manifest"}`)
 		return
 	}
+
+	// Cache the modified manifest so future requests work even when
+	// upstream is unreachable (Cloudflare blocking datacenter IP).
+	w.manifestMu.Lock()
+	w.manifestCache[wrapID] = out
+	w.manifestMu.Unlock()
 
 	c.Set("Content-Type", "application/json")
 	c.Send(out)
@@ -300,6 +324,13 @@ func (w *Wrapper) HandleStream(c *fiber.Ctx) {
 
 	c.Set("Content-Type", "application/json")
 	c.Send(out)
+}
+
+// HasCachedManifest returns true if a modified manifest is cached for the given addon.
+func (w *Wrapper) HasCachedManifest(wrapID string) bool {
+	w.manifestMu.RLock()
+	defer w.manifestMu.RUnlock()
+	return w.manifestCache[wrapID] != nil
 }
 
 // getBaseURL strips the /manifest.json suffix (and any query string) from a

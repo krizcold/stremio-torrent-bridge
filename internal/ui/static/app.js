@@ -59,7 +59,9 @@ function updateProxyVisibility() {
 // Browser Tab Relay
 // ---------------------------------------------------------------------------
 
-// Check if any addon uses tab_relay (directly or via global default)
+// Check if any addon explicitly uses tab_relay and needs the relay active.
+// For sw_fallback, the relay works opportunistically if the tab is open but
+// we don't force-start it or show the banner.
 async function checkRelayNeeded() {
     try {
         const [configResp, addonsResp] = await Promise.all([
@@ -73,15 +75,14 @@ async function checkRelayNeeded() {
 
         const globalMethod = config.defaultFetchMethod || 'sw_fallback';
 
-        // Relay is needed if any addon's effective method is tab_relay,
-        // OR if sw_fallback is active and any addon exists (relay used as fallback).
+        // Relay is only required when an addon explicitly uses tab_relay.
         let needRelay = false;
         if (addons && addons.length > 0) {
             for (const addon of addons) {
                 const effective = (addon.fetchMethod === 'global' || !addon.fetchMethod)
                     ? globalMethod
                     : addon.fetchMethod;
-                if (effective === 'tab_relay' || effective === 'sw_fallback') {
+                if (effective === 'tab_relay') {
                     needRelay = true;
                     break;
                 }
@@ -516,6 +517,79 @@ async function updateAddonFetchMethod(id, method) {
         alert(`Failed to update: ${error.message}`);
         // Reload to reset the select to the correct value
         loadAddons();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Health Check
+// ---------------------------------------------------------------------------
+
+async function loadHealth() {
+    const listEl = document.getElementById('health-list');
+    listEl.innerHTML = '<div style="text-align: center; color: #aaa;">Testing connectivity...</div>';
+
+    try {
+        const response = await fetch('/api/health');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const items = await response.json();
+
+        if (!items || items.length === 0) {
+            listEl.innerHTML = '<div class="empty-state">No addons to check. Add one above!</div>';
+            return;
+        }
+
+        listEl.innerHTML = items.map(item => {
+            const name = item.name || extractAddonLabel(item.originalUrl);
+            const badgeClass = item.status === 'ok' ? 'hb-ok'
+                : item.status === 'degraded' ? 'hb-degraded' : 'hb-failing';
+            const statusLabel = item.status === 'ok' ? 'OK'
+                : item.status === 'degraded' ? 'Degraded' : 'Failing';
+
+            const directIcon = item.directReachable ? 'hc-pass' : 'hc-fail';
+            const directSymbol = item.directReachable ? '&#10003;' : '&#10007;';
+            const directLabel = item.directReachable
+                ? 'Direct: reachable'
+                : `Direct: blocked${item.directError ? ' (' + escapeHtml(item.directError) + ')' : ''}`;
+
+            const relayIcon = item.relayConnected ? 'hc-pass' : 'hc-warn';
+            const relaySymbol = item.relayConnected ? '&#10003;' : '&#8211;';
+            const relayLabel = item.relayConnected ? 'Relay: connected' : 'Relay: disconnected';
+
+            const cacheIcon = item.manifestCached ? 'hc-pass' : 'hc-warn';
+            const cacheSymbol = item.manifestCached ? '&#10003;' : '&#8211;';
+            const cacheLabel = item.manifestCached ? 'Manifest: cached' : 'Manifest: not cached';
+
+            const methodLabel = fetchMethodLabels[item.effectiveMethod] || item.effectiveMethod;
+
+            return `
+                <div class="health-item health-${escapeHtml(item.status)}">
+                    <div class="health-name">
+                        ${escapeHtml(name)}
+                        <span class="health-badge ${badgeClass}">${statusLabel}</span>
+                        <span style="color: #888; font-size: 0.8rem; font-weight: 400;">Method: ${escapeHtml(methodLabel)}</span>
+                    </div>
+                    <div class="health-checks">
+                        <div class="health-check">
+                            <span class="health-check-icon ${directIcon}">${directSymbol}</span>
+                            <span>${directLabel}</span>
+                        </div>
+                        <div class="health-check">
+                            <span class="health-check-icon ${relayIcon}">${relaySymbol}</span>
+                            <span>${relayLabel}</span>
+                        </div>
+                        <div class="health-check">
+                            <span class="health-check-icon ${cacheIcon}">${cacheSymbol}</span>
+                            <span>${cacheLabel}</span>
+                        </div>
+                    </div>
+                    ${item.recommendation ? `<div class="health-recommendation">${escapeHtml(item.recommendation)}</div>` : ''}
+                </div>
+            `;
+        }).join('');
+    } catch (error) {
+        console.error('Failed to load health check:', error);
+        listEl.innerHTML = `<div class="empty-state" style="color: #e94560;">Health check failed: ${escapeHtml(error.message)}</div>`;
     }
 }
 

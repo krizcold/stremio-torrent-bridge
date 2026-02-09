@@ -38,6 +38,10 @@ func RegisterRoutes(router AddonRouter, h *Handlers, w *addonpkg.Wrapper, sp *pr
 	router.AddEndpoint("GET", "/api/config", h.HandleGetConfig)
 	router.AddEndpoint("PUT", "/api/config", h.HandleUpdateConfig)
 
+	// --- Health check routes -------------------------------------------------
+
+	router.AddEndpoint("GET", "/api/health", h.HandleHealthCheck)
+
 	// --- Cache management routes ---------------------------------------------
 
 	router.AddEndpoint("GET", "/api/cache/stats", h.HandleGetCacheStats)
