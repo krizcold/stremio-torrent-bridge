@@ -597,6 +597,13 @@ async function updateAddonFetchMethod(id, method) {
             throw new Error(errorData.error || `HTTP ${response.status}`);
         }
 
+        // Update the local addon list so future re-validations
+        // (e.g. triggered by relay state change) use the new method.
+        if (currentAddonsList) {
+            const entry = currentAddonsList.find(a => a.id === id);
+            if (entry) entry.fetchMethod = method;
+        }
+
         // Re-check if relay is needed with the new per-addon setting
         setTimeout(checkRelayNeeded, 500);
 
