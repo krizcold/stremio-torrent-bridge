@@ -6,6 +6,11 @@ let liveStatsInterval = null;
 let relayActive = false;
 let relayAbortController = null;
 
+// Validation cache (health check results are expensive, cache for 60s)
+let lastHealthData = null;
+let lastHealthTime = 0;
+const HEALTH_CACHE_MS = 60000;
+
 // Fetch method descriptions for the hint text
 const fetchMethodHints = {
     sw_fallback: 'Service Worker intercepts addon requests in the browser; falls back to server-side fetch if SW is unavailable. Works with Cloudflare-protected addons when using Stremio Web.',
@@ -310,6 +315,10 @@ async function saveConfig() {
         // Reload config to refresh engine status
         loadConfig();
 
+        // Invalidate validation cache and re-validate addons with new settings
+        lastHealthData = null;
+        loadAddons();
+
         // Re-check if relay is needed with new settings
         setTimeout(checkRelayNeeded, 500);
     } catch (error) {
@@ -399,9 +408,15 @@ async function loadAddons() {
                         <div class="addon-wrapped-url">${escapeHtml(wrappedURL)}</div>
                         <button class="small" onclick="copyToClipboard('${escapeHtml(wrappedURL)}')">Copy</button>
                     </div>
+                    <div class="addon-validation" id="addon-validation-${addon.id}">
+                        <span class="validation-loading">Checking method compatibility...</span>
+                    </div>
                 </div>
             `;
         }).join('');
+
+        // Validate fetch method compatibility in background
+        validateAddons(addons);
     } catch (error) {
         console.error('Failed to load addons:', error);
         listEl.innerHTML = `<div class="empty-state" style="color: #e94560;">Failed to load addons: ${escapeHtml(error.message)}</div>`;
@@ -460,6 +475,7 @@ async function addAddon() {
 
         // Success - clear input and reload
         urlInput.value = '';
+        lastHealthData = null; // New addon needs fresh health check
         loadAddons();
     } catch (error) {
         console.error('Failed to add addon:', error);
@@ -512,12 +528,218 @@ async function updateAddonFetchMethod(id, method) {
 
         // Re-check if relay is needed with the new per-addon setting
         setTimeout(checkRelayNeeded, 500);
+
+        // Update validation for the changed addon
+        revalidateAddon(id, method);
     } catch (error) {
         console.error('Failed to update addon fetch method:', error);
         alert(`Failed to update: ${error.message}`);
         // Reload to reset the select to the correct value
         loadAddons();
     }
+}
+
+// ---------------------------------------------------------------------------
+// Addon Validation (fetch method compatibility)
+// ---------------------------------------------------------------------------
+
+// Fetches health check + config data, with 60-second caching to avoid
+// repeated expensive HEAD requests on every addon list render.
+async function getHealthAndConfig() {
+    const now = Date.now();
+    if (lastHealthData && (now - lastHealthTime) < HEALTH_CACHE_MS) {
+        return lastHealthData;
+    }
+
+    const [healthResp, configResp] = await Promise.all([
+        fetch('/api/health'),
+        fetch('/api/config'),
+    ]);
+
+    const items = healthResp.ok ? await healthResp.json() : [];
+    const config = configResp.ok ? await configResp.json() : {};
+
+    lastHealthData = { items: items || [], config: config || {} };
+    lastHealthTime = now;
+    return lastHealthData;
+}
+
+// Validates all addons against their effective fetch method. Called after
+// loadAddons() renders the addon list — fills in the validation placeholders.
+async function validateAddons(addons) {
+    try {
+        const { items: healthItems, config } = await getHealthAndConfig();
+
+        const healthMap = {};
+        for (const h of (healthItems || [])) {
+            healthMap[h.id] = h;
+        }
+
+        const globalMethod = config.defaultFetchMethod || 'sw_fallback';
+
+        for (const addon of addons) {
+            const validationEl = document.getElementById('addon-validation-' + addon.id);
+            if (!validationEl) continue;
+
+            const health = healthMap[addon.id];
+            const effectiveMethod = (addon.fetchMethod === 'global' || !addon.fetchMethod)
+                ? globalMethod : addon.fetchMethod;
+
+            validationEl.innerHTML = buildValidationHTML(effectiveMethod, health, config);
+        }
+    } catch (error) {
+        console.error('Failed to validate addons:', error);
+        for (const addon of addons) {
+            const el = document.getElementById('addon-validation-' + addon.id);
+            if (el) el.innerHTML = '';
+        }
+    }
+}
+
+// Re-validates a single addon after the user changes its fetch method.
+// Uses cached health data when available for instant feedback.
+async function revalidateAddon(addonId, newMethod) {
+    const validationEl = document.getElementById('addon-validation-' + addonId);
+    if (!validationEl) return;
+
+    validationEl.innerHTML = '<span class="validation-loading">Checking...</span>';
+
+    try {
+        const { items: healthItems, config } = await getHealthAndConfig();
+
+        const healthMap = {};
+        for (const h of (healthItems || [])) {
+            healthMap[h.id] = h;
+        }
+
+        const globalMethod = config.defaultFetchMethod || 'sw_fallback';
+        const effectiveMethod = (newMethod === 'global' || !newMethod)
+            ? globalMethod : newMethod;
+
+        const health = healthMap[addonId];
+        validationEl.innerHTML = buildValidationHTML(effectiveMethod, health, config);
+    } catch (e) {
+        console.error('Revalidation failed:', e);
+        validationEl.innerHTML = '';
+    }
+}
+
+// Builds the validation HTML for one addon based on its effective fetch method
+// and health check results. Returns '' if nothing to display.
+function buildValidationHTML(method, health, config) {
+    const items = [];
+    const directReachable = health ? health.directReachable : null;
+    const directError = health ? (health.directError || '') : '';
+    const relayConnected = health ? health.relayConnected : false;
+
+    switch (method) {
+        case 'direct':
+            if (directReachable === true) {
+                items.push({ type: 'pass', text: 'PCS can reach this addon directly' });
+            } else if (directReachable === false) {
+                items.push({
+                    type: 'fail',
+                    text: 'PCS-IP is blocked' + (directError ? ' (' + directError + ')' : '') + '. This addon will not work with PCS-IP Only.'
+                });
+                items.push({
+                    type: 'hint',
+                    text: 'Switch to SW + Fallback or Tab Relay for Cloudflare-protected addons.'
+                });
+            }
+            break;
+
+        case 'sw_fallback':
+            items.push({
+                type: 'info',
+                text: 'SW requires Stremio Web (PCS) with nginx SW injection in your Stremio docker-compose.'
+            });
+            if (directReachable === true) {
+                items.push({
+                    type: 'pass',
+                    text: 'Fallback (PCS-IP): reachable \u2014 works even without SW'
+                });
+            } else if (directReachable === false) {
+                items.push({
+                    type: 'fail',
+                    text: 'Fallback (PCS-IP): blocked' + (directError ? ' (' + directError + ')' : '')
+                });
+                items.push({
+                    type: 'hint',
+                    text: 'Without SW injection, this addon will not load. Set up nginx injection or switch to Tab Relay.'
+                });
+            }
+            break;
+
+        case 'sw_only':
+            items.push({
+                type: 'info',
+                text: 'Requires Stremio Web (PCS) with nginx SW injection. No server-side fallback.'
+            });
+            if (directReachable === false) {
+                items.push({
+                    type: 'warn',
+                    text: 'PCS-IP cannot reach this addon \u2014 SW is the only way to access it.'
+                });
+            }
+            break;
+
+        case 'tab_relay':
+            if (health) {
+                if (relayConnected) {
+                    items.push({ type: 'pass', text: 'Relay: connected' });
+                } else {
+                    items.push({
+                        type: 'warn',
+                        text: 'Relay: disconnected \u2014 keep the Bridge UI tab open while streaming'
+                    });
+                }
+            }
+            if (directReachable === true) {
+                items.push({ type: 'pass', text: 'Direct (PCS-IP): reachable as backup' });
+            } else if (directReachable === false) {
+                items.push({
+                    type: 'info',
+                    text: 'Direct (PCS-IP): blocked' + (directError ? ' (' + directError + ')' : '') + ' \u2014 relay is required for this addon'
+                });
+            }
+            break;
+
+        case 'proxy':
+            if (config.proxyURL) {
+                items.push({ type: 'info', text: 'Using proxy: ' + config.proxyURL });
+            } else {
+                items.push({
+                    type: 'fail',
+                    text: 'No proxy URL configured. Set one in Settings below.'
+                });
+            }
+            if (directReachable === false && !config.proxyURL) {
+                items.push({
+                    type: 'hint',
+                    text: 'PCS-IP cannot reach this addon directly; a working proxy is required.'
+                });
+            }
+            break;
+    }
+
+    if (items.length === 0) return '';
+
+    return '<div class="validation-items">' +
+        items.map(function(item) {
+            const iconClass = item.type === 'pass' ? 'v-pass' :
+                item.type === 'fail' ? 'v-fail' :
+                item.type === 'warn' ? 'v-warn' :
+                item.type === 'hint' ? 'v-hint' : 'v-info';
+            const icon = item.type === 'pass' ? '&#10003;' :
+                item.type === 'fail' ? '&#10007;' :
+                item.type === 'warn' ? '&#9888;' :
+                item.type === 'hint' ? '&rarr;' : '&#8505;';
+            return '<div class="validation-line ' + iconClass + '">' +
+                '<span class="validation-icon">' + icon + '</span>' +
+                '<span>' + escapeHtml(item.text) + '</span>' +
+                '</div>';
+        }).join('') +
+        '</div>';
 }
 
 // ---------------------------------------------------------------------------

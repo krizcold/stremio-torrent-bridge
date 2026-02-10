@@ -382,6 +382,54 @@ button.small {
     word-break: break-all;
 }
 
+/* Addon method validation */
+.addon-validation {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.addon-validation:empty {
+    display: none;
+}
+
+.validation-loading {
+    font-size: 0.8rem;
+    color: #666;
+    font-style: italic;
+}
+
+.validation-items {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.validation-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 0.8rem;
+    line-height: 1.4;
+}
+
+.validation-icon {
+    flex-shrink: 0;
+    width: 14px;
+    text-align: center;
+    margin-top: 1px;
+}
+
+.validation-line.v-pass { color: #4ec9b0; }
+.validation-line.v-fail { color: #e94560; }
+.validation-line.v-warn { color: #f0a500; }
+.validation-line.v-info { color: #888; }
+.validation-line.v-hint {
+    color: #f0a500;
+    padding-left: 20px;
+    font-size: 0.78rem;
+}
+
 /* ---------------------------------------------------------------------------
    Cache Stats
 --------------------------------------------------------------------------- */
