@@ -4,12 +4,17 @@ let liveStatsInterval = null;
 
 // Relay state
 let relayActive = false;
+let relayConnectedState = false;
 let relayAbortController = null;
 
-// Validation cache (health check results are expensive, cache for 60s)
+// Validation cache (invalidated on addon add, settings save, page reload)
 let lastHealthData = null;
-let lastHealthTime = 0;
-const HEALTH_CACHE_MS = 60000;
+
+// Saved config for unsaved changes detection
+let savedConfig = null;
+
+// Current addon list for re-validation after relay state changes
+let currentAddonsList = null;
 
 // Fetch method descriptions for the hint text
 const fetchMethodHints = {
@@ -32,7 +37,14 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchMethodSelect.addEventListener('change', () => {
         updateFetchMethodHint();
         updateProxyVisibility();
+        checkUnsavedChanges();
     });
+
+    // Track unsaved changes in all settings inputs
+    document.getElementById('engine-select').addEventListener('change', checkUnsavedChanges);
+    document.getElementById('proxy-url').addEventListener('input', checkUnsavedChanges);
+    document.getElementById('cache-size').addEventListener('input', checkUnsavedChanges);
+    document.getElementById('cache-age').addEventListener('input', checkUnsavedChanges);
 
     // Auto-refresh cache stats every 30 seconds
     cacheRefreshInterval = setInterval(loadCacheStats, 30000);
@@ -117,6 +129,7 @@ function startRelay() {
 
 function stopRelay() {
     relayActive = false;
+    relayConnectedState = false;
     if (relayAbortController) {
         relayAbortController.abort();
         relayAbortController = null;
@@ -124,9 +137,17 @@ function stopRelay() {
 
     const section = document.getElementById('relay-section');
     section.style.display = 'none';
+
+    // Re-validate addons that depend on relay status
+    if (currentAddonsList) {
+        validateAddons(currentAddonsList);
+    }
 }
 
 function updateRelayUI(connected) {
+    const changed = relayConnectedState !== connected;
+    relayConnectedState = connected;
+
     const section = document.getElementById('relay-section');
     const label = document.getElementById('relay-label');
 
@@ -136,6 +157,11 @@ function updateRelayUI(connected) {
     } else {
         section.classList.add('relay-disconnected');
         label.textContent = 'Relay Disconnected';
+    }
+
+    // Re-validate addons when relay state changes (e.g., first connect)
+    if (changed && currentAddonsList) {
+        validateAddons(currentAddonsList);
     }
 }
 
@@ -230,6 +256,16 @@ async function loadConfig() {
         updateFetchMethodHint();
         updateProxyVisibility();
 
+        // Store saved config for unsaved changes detection
+        savedConfig = {
+            defaultEngine: config.defaultEngine || 'torrserver',
+            defaultFetchMethod: config.defaultFetchMethod || 'sw_fallback',
+            proxyURL: config.proxyURL || '',
+            cacheSizeGB: config.cacheSizeGB || 50,
+            cacheMaxAgeDays: config.cacheMaxAgeDays || 30,
+        };
+        checkUnsavedChanges();
+
         // Show engine status
         const statusEl = document.getElementById('engine-status');
         if (config.engines && Object.keys(config.engines).length > 0) {
@@ -312,6 +348,16 @@ async function saveConfig() {
         // Success
         showStatus(statusEl, 'Settings saved!', false);
 
+        // Update saved config reference immediately to prevent flash
+        savedConfig = {
+            defaultEngine: config.defaultEngine,
+            defaultFetchMethod: config.defaultFetchMethod,
+            proxyURL: config.proxyURL,
+            cacheSizeGB: config.cacheSizeGB,
+            cacheMaxAgeDays: config.cacheMaxAgeDays,
+        };
+        checkUnsavedChanges();
+
         // Reload config to refresh engine status
         loadConfig();
 
@@ -328,6 +374,30 @@ async function saveConfig() {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Settings';
     }
+}
+
+// Check if current settings form values differ from the last saved config.
+// Shows/hides the "Unsaved changes" indicator accordingly.
+function checkUnsavedChanges() {
+    const indicator = document.getElementById('unsaved-changes');
+    if (!indicator || !savedConfig) return;
+
+    const current = {
+        defaultEngine: document.getElementById('engine-select').value,
+        defaultFetchMethod: document.getElementById('fetch-method-select').value,
+        proxyURL: document.getElementById('proxy-url').value.trim(),
+        cacheSizeGB: parseInt(document.getElementById('cache-size').value, 10) || 0,
+        cacheMaxAgeDays: parseInt(document.getElementById('cache-age').value, 10) || 0,
+    };
+
+    const hasChanges =
+        current.defaultEngine !== savedConfig.defaultEngine ||
+        current.defaultFetchMethod !== savedConfig.defaultFetchMethod ||
+        current.proxyURL !== savedConfig.proxyURL ||
+        current.cacheSizeGB !== savedConfig.cacheSizeGB ||
+        current.cacheMaxAgeDays !== savedConfig.cacheMaxAgeDays;
+
+    indicator.style.display = hasChanges ? 'block' : 'none';
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +424,7 @@ async function loadAddons() {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         const addons = await response.json();
+        currentAddonsList = addons;
 
         if (!addons || addons.length === 0) {
             listEl.innerHTML = '<div class="empty-state">No addons configured. Add one above!</div>';
@@ -543,11 +614,10 @@ async function updateAddonFetchMethod(id, method) {
 // Addon Validation (fetch method compatibility)
 // ---------------------------------------------------------------------------
 
-// Fetches health check + config data, with 60-second caching to avoid
-// repeated expensive HEAD requests on every addon list render.
+// Fetches health check + config data. Results are cached until explicitly
+// invalidated (on addon add, settings save, or page reload). No periodic refresh.
 async function getHealthAndConfig() {
-    const now = Date.now();
-    if (lastHealthData && (now - lastHealthTime) < HEALTH_CACHE_MS) {
+    if (lastHealthData) {
         return lastHealthData;
     }
 
@@ -560,7 +630,6 @@ async function getHealthAndConfig() {
     const config = configResp.ok ? await configResp.json() : {};
 
     lastHealthData = { items: items || [], config: config || {} };
-    lastHealthTime = now;
     return lastHealthData;
 }
 
@@ -630,7 +699,6 @@ function buildValidationHTML(method, health, config) {
     const items = [];
     const directReachable = health ? health.directReachable : null;
     const directError = health ? (health.directError || '') : '';
-    const relayConnected = health ? health.relayConnected : false;
 
     switch (method) {
         case 'direct':
@@ -684,15 +752,18 @@ function buildValidationHTML(method, health, config) {
             break;
 
         case 'tab_relay':
-            if (health) {
-                if (relayConnected) {
-                    items.push({ type: 'pass', text: 'Relay: connected' });
-                } else {
-                    items.push({
-                        type: 'warn',
-                        text: 'Relay: disconnected \u2014 keep the Bridge UI tab open while streaming'
-                    });
-                }
+            if (relayActive && relayConnectedState) {
+                items.push({ type: 'pass', text: 'Relay: active' });
+            } else if (relayActive) {
+                items.push({
+                    type: 'info',
+                    text: 'Relay: connecting...'
+                });
+            } else {
+                items.push({
+                    type: 'info',
+                    text: 'Relay: will start automatically \u2014 keep this tab open'
+                });
             }
             if (directReachable === true) {
                 items.push({ type: 'pass', text: 'Direct (PCS-IP): reachable as backup' });
@@ -740,79 +811,6 @@ function buildValidationHTML(method, health, config) {
                 '</div>';
         }).join('') +
         '</div>';
-}
-
-// ---------------------------------------------------------------------------
-// Health Check
-// ---------------------------------------------------------------------------
-
-async function loadHealth() {
-    const listEl = document.getElementById('health-list');
-    listEl.innerHTML = '<div style="text-align: center; color: #aaa;">Testing connectivity...</div>';
-
-    try {
-        const response = await fetch('/api/health');
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-        const items = await response.json();
-
-        if (!items || items.length === 0) {
-            listEl.innerHTML = '<div class="empty-state">No addons to check. Add one above!</div>';
-            return;
-        }
-
-        listEl.innerHTML = items.map(item => {
-            const name = item.name || extractAddonLabel(item.originalUrl);
-            const badgeClass = item.status === 'ok' ? 'hb-ok'
-                : item.status === 'degraded' ? 'hb-degraded' : 'hb-failing';
-            const statusLabel = item.status === 'ok' ? 'OK'
-                : item.status === 'degraded' ? 'Degraded' : 'Failing';
-
-            const directIcon = item.directReachable ? 'hc-pass' : 'hc-fail';
-            const directSymbol = item.directReachable ? '&#10003;' : '&#10007;';
-            const directLabel = item.directReachable
-                ? 'Direct: reachable'
-                : `Direct: blocked${item.directError ? ' (' + escapeHtml(item.directError) + ')' : ''}`;
-
-            const relayIcon = item.relayConnected ? 'hc-pass' : 'hc-warn';
-            const relaySymbol = item.relayConnected ? '&#10003;' : '&#8211;';
-            const relayLabel = item.relayConnected ? 'Relay: connected' : 'Relay: disconnected';
-
-            const cacheIcon = item.manifestCached ? 'hc-pass' : 'hc-warn';
-            const cacheSymbol = item.manifestCached ? '&#10003;' : '&#8211;';
-            const cacheLabel = item.manifestCached ? 'Manifest: cached' : 'Manifest: not cached';
-
-            const methodLabel = fetchMethodLabels[item.effectiveMethod] || item.effectiveMethod;
-
-            return `
-                <div class="health-item health-${escapeHtml(item.status)}">
-                    <div class="health-name">
-                        ${escapeHtml(name)}
-                        <span class="health-badge ${badgeClass}">${statusLabel}</span>
-                        <span style="color: #888; font-size: 0.8rem; font-weight: 400;">Method: ${escapeHtml(methodLabel)}</span>
-                    </div>
-                    <div class="health-checks">
-                        <div class="health-check">
-                            <span class="health-check-icon ${directIcon}">${directSymbol}</span>
-                            <span>${directLabel}</span>
-                        </div>
-                        <div class="health-check">
-                            <span class="health-check-icon ${relayIcon}">${relaySymbol}</span>
-                            <span>${relayLabel}</span>
-                        </div>
-                        <div class="health-check">
-                            <span class="health-check-icon ${cacheIcon}">${cacheSymbol}</span>
-                            <span>${cacheLabel}</span>
-                        </div>
-                    </div>
-                    ${item.recommendation ? `<div class="health-recommendation">${escapeHtml(item.recommendation)}</div>` : ''}
-                </div>
-            `;
-        }).join('');
-    } catch (error) {
-        console.error('Failed to load health check:', error);
-        listEl.innerHTML = `<div class="empty-state" style="color: #e94560;">Health check failed: ${escapeHtml(error.message)}</div>`;
-    }
 }
 
 // ---------------------------------------------------------------------------
