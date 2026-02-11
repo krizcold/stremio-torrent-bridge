@@ -17,12 +17,16 @@ type Config struct {
 	DefaultEngine string // env: TORRENT_ENGINE, default: "torrserver"
 
 	// Engine URLs
-	TorrServerURL    string // env: TORRSERVER_URL, default: "http://torrserver:8090"
-	RqbitURL         string // env: RQBIT_URL, default: "http://rqbit:3030"
-	QBittorrentURL   string // env: QBITTORRENT_URL, default: "http://qbittorrent:8080"
-	QBitDownloadPath string // env: QBITTORRENT_DOWNLOAD_PATH, default: "/downloads"
-	QBitUsername     string // env: QBITTORRENT_USERNAME, default: "admin"
-	QBitPassword     string // env: QBITTORRENT_PASSWORD, default: "adminadmin"
+	TorrServerURL      string // env: TORRSERVER_URL, default: "http://torrserver:8090"
+	TorrServerUsername  string // env: TORRSERVER_USERNAME, default: "" (no auth)
+	TorrServerPassword  string // env: TORRSERVER_PASSWORD, default: ""
+	RqbitURL           string // env: RQBIT_URL, default: "http://rqbit:3030"
+	RqbitUsername       string // env: RQBIT_USERNAME, default: "" (no auth)
+	RqbitPassword       string // env: RQBIT_PASSWORD, default: ""
+	QBittorrentURL     string // env: QBITTORRENT_URL, default: "http://qbittorrent:8080"
+	QBitDownloadPath   string // env: QBITTORRENT_DOWNLOAD_PATH, default: "/downloads"
+	QBitUsername       string // env: QBITTORRENT_USERNAME, default: "admin"
+	QBitPassword       string // env: QBITTORRENT_PASSWORD, default: "adminadmin"
 
 	// Fetch proxy
 	DefaultFetchMethod string // env: DEFAULT_FETCH_METHOD, default: "sw_fallback"
@@ -85,8 +89,20 @@ func Load() *Config {
 	if v := os.Getenv("TORRSERVER_URL"); v != "" {
 		c.TorrServerURL = v
 	}
+	if v := os.Getenv("TORRSERVER_USERNAME"); v != "" {
+		c.TorrServerUsername = v
+	}
+	if v := os.Getenv("TORRSERVER_PASSWORD"); v != "" {
+		c.TorrServerPassword = v
+	}
 	if v := os.Getenv("RQBIT_URL"); v != "" {
 		c.RqbitURL = v
+	}
+	if v := os.Getenv("RQBIT_USERNAME"); v != "" {
+		c.RqbitUsername = v
+	}
+	if v := os.Getenv("RQBIT_PASSWORD"); v != "" {
+		c.RqbitPassword = v
 	}
 	if v := os.Getenv("QBITTORRENT_URL"); v != "" {
 		c.QBittorrentURL = v

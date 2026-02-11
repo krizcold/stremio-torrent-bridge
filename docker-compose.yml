@@ -33,11 +33,19 @@ services:
     user: "1000:1000"
     expose:
       - 8080
+    extra_hosts:
+      - "torrserver:host-gateway"
+      - "rqbit:host-gateway"
+      - "qbittorrent:host-gateway"
     environment:
       TORRENT_ENGINE: "${TORRENT_ENGINE:-torrserver}"
       BRIDGE_EXTERNAL_URL: "https://stremiotorrentbridge-${PCS_DOMAIN}"
       TORRSERVER_URL: "http://torrserver:8090"
+      TORRSERVER_USERNAME: "bridge"
+      TORRSERVER_PASSWORD: "$PCS_DEFAULT_PASSWORD"
       RQBIT_URL: "http://rqbit:3030"
+      RQBIT_USERNAME: "bridge"
+      RQBIT_PASSWORD: "$PCS_DEFAULT_PASSWORD"
       QBITTORRENT_URL: "http://qbittorrent:8080"
       QBITTORRENT_DOWNLOAD_PATH: "/downloads"
       QBITTORRENT_USERNAME: "admin"
@@ -51,7 +59,6 @@ services:
     depends_on:
       - torrserver
     networks:
-      - internal
       - pcs
     x-casaos:
       envs:
@@ -75,28 +82,34 @@ services:
     container_name: stremio-bridge-torrserver
     restart: unless-stopped
     cpu_shares: 50
+    network_mode: host
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        printf '{"bridge":"%s"}' "$$TS_AUTH_PASSWORD" > /opt/ts/config/accs.db
+        exec /docker-entrypoint.sh
     environment:
       TS_PORT: "8090"
       TS_DONTKILL: "1"
-      TS_HTTPAUTH: "0"
+      TS_HTTPAUTH: "1"
+      TS_AUTH_PASSWORD: "$PCS_DEFAULT_PASSWORD"
     volumes:
       - /DATA/AppData/stremiotorrentbridge/torrserver/config:/opt/ts/config
       - /DATA/AppData/stremiotorrentbridge/torrserver/cache:/opt/ts/torrents
-    networks:
-      - internal
 
   # Engine B: rqbit
   rqbit:
-    image: ikatson/rqbit:8.1.1
+    image: ikatson/rqbit:9.0.0-beta.2
     container_name: stremio-bridge-rqbit
     restart: unless-stopped
     cpu_shares: 50
-    command: server start /downloads
+    network_mode: host
+    command: server start --listen-port 4240 /downloads
+    environment:
+      RQBIT_HTTP_BASIC_AUTH_USERPASS: "bridge:$PCS_DEFAULT_PASSWORD"
     volumes:
       - /DATA/AppData/stremiotorrentbridge/rqbit/downloads:/downloads
       - /DATA/AppData/stremiotorrentbridge/rqbit/config:/root/.config/rqbit
-    networks:
-      - internal
 
   # Engine C: qBittorrent
   qbittorrent:
@@ -104,6 +117,7 @@ services:
     container_name: stremio-bridge-qbittorrent
     restart: unless-stopped
     cpu_shares: 50
+    network_mode: host
     environment:
       PUID: "$PUID"
       PGID: "$PGID"
@@ -112,12 +126,8 @@ services:
     volumes:
       - /DATA/AppData/stremiotorrentbridge/qbittorrent/config:/config
       - /DATA/AppData/stremiotorrentbridge/qbittorrent/downloads:/downloads
-    networks:
-      - internal
 
 networks:
-  internal:
-    driver: bridge
   pcs:
     external: true
 

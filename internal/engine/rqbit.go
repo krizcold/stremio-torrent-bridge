@@ -16,6 +16,8 @@ import (
 // RqbitAdapter implements Engine for rqbit (github.com/ikatson/rqbit)
 type RqbitAdapter struct {
 	baseURL      string
+	username     string
+	password     string
 	client       *http.Client // For API calls (30s timeout)
 	streamClient *http.Client // For streaming (no timeout)
 
@@ -24,14 +26,24 @@ type RqbitAdapter struct {
 	idToHash map[int]string // rqbit numeric ID -> infoHash (lowercase)
 }
 
-// NewRqbitAdapter creates a new rqbit engine adapter
-func NewRqbitAdapter(baseURL string) *RqbitAdapter {
+// NewRqbitAdapter creates a new rqbit engine adapter.
+// If username and password are non-empty, HTTP Basic Auth is used on all requests.
+func NewRqbitAdapter(baseURL, username, password string) *RqbitAdapter {
 	return &RqbitAdapter{
 		baseURL:      strings.TrimRight(baseURL, "/"),
+		username:     username,
+		password:     password,
 		client:       httpclient.New(),
 		streamClient: httpclient.NewStreaming(),
 		hashToID:     make(map[string]int),
 		idToHash:     make(map[int]string),
+	}
+}
+
+// setAuth adds Basic Auth to a request if credentials are configured.
+func (r *RqbitAdapter) setAuth(req *http.Request) {
+	if r.username != "" && r.password != "" {
+		req.SetBasicAuth(r.username, r.password)
 	}
 }
 
@@ -103,6 +115,7 @@ func (r *RqbitAdapter) AddTorrent(ctx context.Context, magnetURI string) (*Torre
 		return nil, fmt.Errorf("rqbit add torrent: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "text/plain")
+	r.setAuth(req)
 
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -217,6 +230,7 @@ func (r *RqbitAdapter) StreamFile(ctx context.Context, infoHash string, fileInde
 			streamReq.Header.Set(h, v)
 		}
 	}
+	r.setAuth(streamReq)
 
 	resp, err := r.streamClient.Do(streamReq)
 	if err != nil {
@@ -255,6 +269,7 @@ func (r *RqbitAdapter) RemoveTorrent(ctx context.Context, infoHash string, delet
 	if err != nil {
 		return fmt.Errorf("rqbit remove: create request: %w", err)
 	}
+	r.setAuth(req)
 
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -306,6 +321,7 @@ func (r *RqbitAdapter) ListTorrents(ctx context.Context) ([]TorrentInfo, error) 
 	if err != nil {
 		return nil, fmt.Errorf("rqbit list torrents: create request: %w", err)
 	}
+	r.setAuth(req)
 
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -379,6 +395,7 @@ func (r *RqbitAdapter) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("rqbit ping: create request: %w", err)
 	}
+	r.setAuth(req)
 
 	resp, err := r.client.Do(req)
 	if err != nil {
@@ -402,6 +419,7 @@ func (r *RqbitAdapter) getTorrentByID(ctx context.Context, id int, knownHash str
 	if err != nil {
 		return nil, fmt.Errorf("rqbit get torrent %d: create request: %w", id, err)
 	}
+	r.setAuth(req)
 
 	resp, err := r.client.Do(req)
 	if err != nil {

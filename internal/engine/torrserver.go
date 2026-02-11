@@ -15,14 +15,19 @@ import (
 // TorrServerAdapter implements Engine for TorrServer (github.com/YouROK/TorrServer)
 type TorrServerAdapter struct {
 	baseURL      string
+	username     string
+	password     string
 	client       *http.Client // For API calls (30s timeout)
 	streamClient *http.Client // For streaming (no timeout)
 }
 
-// NewTorrServerAdapter creates a new TorrServer engine adapter
-func NewTorrServerAdapter(baseURL string) *TorrServerAdapter {
+// NewTorrServerAdapter creates a new TorrServer engine adapter.
+// If username and password are non-empty, HTTP Basic Auth is used on all requests.
+func NewTorrServerAdapter(baseURL, username, password string) *TorrServerAdapter {
 	return &TorrServerAdapter{
 		baseURL:      strings.TrimRight(baseURL, "/"),
+		username:     username,
+		password:     password,
 		client:       httpclient.New(),
 		streamClient: httpclient.NewStreaming(),
 	}
@@ -99,6 +104,7 @@ func (t *TorrServerAdapter) StreamFile(ctx context.Context, infoHash string, fil
 			streamReq.Header.Set(h, v)
 		}
 	}
+	t.setAuth(streamReq)
 
 	resp, err := t.streamClient.Do(streamReq)
 	if err != nil {
@@ -196,6 +202,7 @@ func (t *TorrServerAdapter) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("torrserver ping: create request: %w", err)
 	}
+	t.setAuth(req)
 
 	resp, err := t.client.Do(req)
 	if err != nil {
@@ -208,6 +215,13 @@ func (t *TorrServerAdapter) Ping(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// setAuth adds Basic Auth to a request if credentials are configured.
+func (t *TorrServerAdapter) setAuth(req *http.Request) {
+	if t.username != "" && t.password != "" {
+		req.SetBasicAuth(t.username, t.password)
+	}
 }
 
 // doTorrentsRequest sends a POST to the /torrents endpoint with the given request body.
@@ -223,6 +237,7 @@ func (t *TorrServerAdapter) doTorrentsRequest(ctx context.Context, reqBody torrS
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	t.setAuth(req)
 
 	resp, err := t.client.Do(req)
 	if err != nil {

@@ -25,13 +25,13 @@ func main() {
 	var eng engine.Engine
 	switch cfg.DefaultEngine {
 	case "torrserver":
-		eng = engine.NewTorrServerAdapter(cfg.TorrServerURL)
+		eng = engine.NewTorrServerAdapter(cfg.TorrServerURL, cfg.TorrServerUsername, cfg.TorrServerPassword)
 	case "rqbit":
-		eng = engine.NewRqbitAdapter(cfg.RqbitURL)
+		eng = engine.NewRqbitAdapter(cfg.RqbitURL, cfg.RqbitUsername, cfg.RqbitPassword)
 	case "qbittorrent":
 		eng = engine.NewQBittorrentAdapter(cfg.QBittorrentURL, cfg.QBitDownloadPath, cfg.QBitUsername, cfg.QBitPassword)
 	default:
-		eng = engine.NewTorrServerAdapter(cfg.TorrServerURL)
+		eng = engine.NewTorrServerAdapter(cfg.TorrServerURL, cfg.TorrServerUsername, cfg.TorrServerPassword)
 	}
 	fmt.Printf("Using engine: %s\n", eng.Name())
 
