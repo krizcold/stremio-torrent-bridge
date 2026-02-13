@@ -229,22 +229,32 @@ func (q *QBittorrentAdapter) AddTorrent(ctx context.Context, magnetURI string) (
 func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fileIndex int, req *http.Request) (*StreamResponse, error) {
 	hash := strings.ToLower(infoHash)
 
-	// Get torrent info for the content path
-	torrents, err := q.getTorrentInfo(ctx, hash)
-	if err != nil {
-		return nil, fmt.Errorf("qbittorrent stream: get torrent info: %w", err)
-	}
-	if len(torrents) == 0 {
-		return nil, fmt.Errorf("qbittorrent stream: torrent not found: %s", hash)
-	}
-
-	// Get file list
-	files, err := q.getFiles(ctx, hash)
-	if err != nil {
-		return nil, fmt.Errorf("qbittorrent stream: get files: %w", err)
-	}
-	if fileIndex < 0 || fileIndex >= len(files) {
-		return nil, fmt.Errorf("qbittorrent stream: file index %d out of range (have %d files)", fileIndex, len(files))
+	// Wait for the torrent to appear and have metadata resolved.
+	// The wrapper adds torrents asynchronously (fire-and-forget goroutine),
+	// so the torrent may not exist yet when Stremio requests the stream.
+	var torrents []qbitTorrentInfo
+	var files []qbitFileInfo
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		var err error
+		torrents, err = q.getTorrentInfo(ctx, hash)
+		if err == nil && len(torrents) > 0 {
+			files, err = q.getFiles(ctx, hash)
+			if err == nil && fileIndex >= 0 && fileIndex < len(files) {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			if len(torrents) == 0 {
+				return nil, fmt.Errorf("qbittorrent stream: torrent not found: %s", hash)
+			}
+			return nil, fmt.Errorf("qbittorrent stream: file index %d out of range (have %d files)", fileIndex, len(files))
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(1 * time.Second):
+		}
 	}
 
 	targetFile := files[fileIndex]
