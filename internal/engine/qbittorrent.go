@@ -47,14 +47,19 @@ func NewQBittorrentAdapter(baseURL, downloadPath, username, password string) *QB
 // qBittorrent API response types
 
 type qbitTorrentInfo struct {
-	Hash        string  `json:"hash"`
-	Name        string  `json:"name"`
-	SavePath    string  `json:"save_path"`
-	ContentPath string  `json:"content_path"`
-	Progress    float64 `json:"progress"`
-	Size        int64   `json:"size"`
-	PieceSize   int64   `json:"piece_size"`
-	NumComplete int     `json:"num_complete"`
+	Hash          string  `json:"hash"`
+	Name          string  `json:"name"`
+	SavePath      string  `json:"save_path"`
+	ContentPath   string  `json:"content_path"`
+	Progress      float64 `json:"progress"`
+	Size          int64   `json:"size"`
+	PieceSize     int64   `json:"piece_size"`
+	NumComplete   int     `json:"num_complete"`
+	NumIncomplete int     `json:"num_incomplete"`
+	NumSeeds      int     `json:"num_seeds"`
+	NumLeechs     int     `json:"num_leechs"`
+	DlSpeed       int64   `json:"dlspeed"`
+	UpSpeed       int64   `json:"upspeed"`
 }
 
 type qbitFileInfo struct {
@@ -600,13 +605,25 @@ func torrentInfoFromQBittorrent(t *qbitTorrentInfo, files []qbitFileInfo) *Torre
 		}
 	}
 
-	return &TorrentInfo{
+	info := &TorrentInfo{
 		InfoHash:  strings.ToLower(t.Hash),
 		Name:      t.Name,
 		Files:     torrentFiles,
 		EngineID:  strings.ToLower(t.Hash),
 		TotalSize: totalSize,
 	}
+
+	if t.NumSeeds > 0 || t.NumLeechs > 0 || t.DlSpeed > 0 || t.NumComplete > 0 {
+		info.Stats = &TorrentStats{
+			DownloadSpeed:    float64(t.DlSpeed),
+			UploadSpeed:      float64(t.UpSpeed),
+			ActivePeers:      t.NumSeeds + t.NumLeechs,
+			TotalPeers:       t.NumComplete + t.NumIncomplete,
+			ConnectedSeeders: t.NumSeeds,
+		}
+	}
+
+	return info
 }
 
 // parseRangeHeader parses an HTTP Range header value like "bytes=0-499" or
