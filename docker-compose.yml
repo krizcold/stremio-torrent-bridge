@@ -38,7 +38,7 @@ services:
       - "rqbit:host-gateway"
       - "qbittorrent:host-gateway"
     environment:
-      TORRENT_ENGINE: "${TORRENT_ENGINE:-torrserver}"
+      TORRENT_ENGINE: "${TORRENT_ENGINE:-qbittorrent}"
       BRIDGE_EXTERNAL_URL: "https://stremiotorrentbridge-${PCS_DOMAIN}"
       TORRSERVER_URL: "http://torrserver:8090"
       TORRSERVER_USERNAME: "bridge"
@@ -86,8 +86,15 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        printf '{"bridge":"%s"}' "$$TS_AUTH_PASSWORD" > /opt/ts/config/accs.db
-        exec /docker-entrypoint.sh
+        printf '{"bridge":"%s"}' "$$TS_AUTH_PASSWORD" > "$$TS_CONF_PATH/accs.db"
+        PUB_IPV6=$$(wget -qO- https://api6.ipify.org 2>/dev/null || true)
+        mkdir -p "$$TS_CONF_PATH" "$$TS_TORR_DIR"
+        touch "$$TS_LOG_PATH"
+        printf '%s' '{"BitTorr":{"CacheSize":67108864,"ReaderReadAHead":95,"PreloadCache":5,"UseDisk":false,"TorrentsSavePath":"","RemoveCacheOnDrop":false,"ForceEncrypt":false,"RetrackersMode":1,"TorrentDisconnectTimeout":30,"EnableDebug":false,"EnableDLNA":false,"FriendlyName":"","EnableRutorSearch":false,"EnableTorznabSearch":false,"TorznabUrls":null,"EnableIPv6":true,"DisableTCP":false,"DisableUTP":false,"DisableUPNP":false,"DisableDHT":false,"DisablePEX":false,"DisableUpload":false,"DownloadRateLimit":0,"UploadRateLimit":0,"ConnectionsLimit":150,"PeersListenPort":42069,"SslPort":0,"SslCert":"","SslKey":"","ResponsiveMode":true,"ShowFSActiveTorr":true,"StoreSettingsInJson":true,"StoreViewedInJson":false}}' > "$$TS_CONF_PATH/settings.json"
+        FLAGS="--path $$TS_CONF_PATH --logpath $$TS_LOG_PATH --port $$TS_PORT --torrentsdir $$TS_TORR_DIR --dontkill --httpauth"
+        [ -n "$$PUB_IPV6" ] && FLAGS="$$FLAGS --pubipv6 $$PUB_IPV6"
+        echo "Running with: $$FLAGS"
+        exec torrserver $$FLAGS
     environment:
       TS_PORT: "8090"
       TS_DONTKILL: "1"
@@ -118,11 +125,42 @@ services:
     restart: unless-stopped
     cpu_shares: 50
     network_mode: host
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mkdir -p /config/qBittorrent
+        cat << 'PYEOF' > /tmp/qbt_config.py
+        import hashlib, os, base64, sys, pathlib
+        password = sys.argv[1].encode()
+        salt = os.urandom(16)
+        dk = hashlib.pbkdf2_hmac('sha512', password, salt, 100000)
+        pw_hash = '@ByteArray(' + base64.b64encode(salt).decode() + ':' + base64.b64encode(dk).decode() + ')'
+        config = '[LegalNotice]\nAccepted=true\n\n[Preferences]\n'
+        config += 'WebUI\\Port=8080\n'
+        config += 'WebUI\\Username=admin\n'
+        config += 'WebUI\\Password_PBKDF2=' + pw_hash + '\n'
+        config += 'WebUI\\HostHeaderValidation=false\n'
+        config += 'WebUI\\CSRFProtection=false\n'
+        config += 'WebUI\\ServerDomains=*\n'
+        config += 'WebUI\\Address=*\n'
+        config += 'Connection\\PortRangeMin=6881\n'
+        config += 'Connection\\UPnP=false\n'
+        config += 'Bittorrent\\MaxConnecs=500\n'
+        config += 'Bittorrent\\MaxConnecsPerTorrent=100\n'
+        config += 'Queueing\\QueueingEnabled=false\n'
+        config += 'Downloads\\SavePath=/downloads/\n'
+        pathlib.Path('/config/qBittorrent/qBittorrent.conf').write_text(config)
+        print('Password hash: ' + pw_hash)
+        PYEOF
+        python3 /tmp/qbt_config.py "$$QBT_PASSWORD"
+        echo "qBittorrent config written, starting init..."
+        exec /init
     environment:
       PUID: "$PUID"
       PGID: "$PGID"
       TZ: "$TZ"
       WEBUI_PORT: "8080"
+      QBT_PASSWORD: "$PCS_DEFAULT_PASSWORD"
     volumes:
       - /DATA/AppData/stremiotorrentbridge/qbittorrent/config:/config
       - /DATA/AppData/stremiotorrentbridge/qbittorrent/downloads:/downloads

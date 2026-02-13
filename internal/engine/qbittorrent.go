@@ -251,9 +251,11 @@ func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fi
 	// within the torrent, potentially including the torrent name as a prefix.
 	filePath := filepath.Join(q.downloadPath, targetFile.Name)
 
-	// Wait for initial pieces to be available for streaming
-	if err := q.waitForPieces(ctx, hash, fileIndex, 60*time.Second); err != nil {
-		return nil, fmt.Errorf("qbittorrent stream: %w", err)
+	// Skip piece waiting if the torrent is already fully downloaded
+	if torrents[0].Progress < 1.0 {
+		if err := q.waitForPieces(ctx, hash, fileIndex, 60*time.Second); err != nil {
+			return nil, fmt.Errorf("qbittorrent stream: %w", err)
+		}
 	}
 
 	// Open the file from the shared volume
@@ -460,9 +462,9 @@ func (q *QBittorrentAdapter) waitForPieces(ctx context.Context, hash string, fil
 	const minPieces = 5
 
 	for time.Now().Before(deadline) {
-		// Get torrent info for piece size
-		torrents, err := q.getTorrentInfo(ctx, hash)
-		if err != nil || len(torrents) == 0 {
+		// Get piece size from /api/v2/torrents/properties (not available in /info)
+		propResp, err := q.doRequest(ctx, http.MethodGet, "/api/v2/torrents/properties?hash="+hash, "")
+		if err != nil {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -470,9 +472,20 @@ func (q *QBittorrentAdapter) waitForPieces(ctx context.Context, hash string, fil
 				continue
 			}
 		}
-
-		pieceSize := torrents[0].PieceSize
-		if pieceSize == 0 {
+		propData, err := io.ReadAll(propResp.Body)
+		propResp.Body.Close()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(500 * time.Millisecond):
+				continue
+			}
+		}
+		var props struct {
+			PieceSize int64 `json:"piece_size"`
+		}
+		if err := json.Unmarshal(propData, &props); err != nil || props.PieceSize == 0 {
 			// Metadata not yet available, wait and retry
 			select {
 			case <-ctx.Done():
@@ -481,6 +494,8 @@ func (q *QBittorrentAdapter) waitForPieces(ctx context.Context, hash string, fil
 				continue
 			}
 		}
+
+		pieceSize := props.PieceSize
 
 		// Get the file list to determine which pieces belong to our file
 		files, err := q.getFiles(ctx, hash)
