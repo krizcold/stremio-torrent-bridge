@@ -259,6 +259,16 @@ func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fi
 
 	targetFile := files[fileIndex]
 
+	// Focus all bandwidth on the target file: set it to max priority,
+	// set all other files to "do not download". This ensures qBittorrent
+	// downloads pieces for the streaming file first instead of sequentially
+	// from the start of the entire torrent.
+	q.focusFile(ctx, hash, fileIndex, len(files))
+
+	// Remove all other torrents to free bandwidth and disk resources.
+	// Run in background to not delay the stream start.
+	go q.removeOtherTorrents(ctx, hash)
+
 	// Construct the local file path. qBittorrent saves files at:
 	//   save_path/torrent_name/file_name  (for multi-file torrents)
 	//   save_path/file_name               (for single-file torrents)
@@ -595,6 +605,53 @@ func (q *QBittorrentAdapter) waitForPieces(ctx context.Context, hash string, fil
 	}
 
 	return fmt.Errorf("timeout waiting for initial pieces to download (hash=%s, fileIndex=%d)", hash, fileIndex)
+}
+
+// focusFile sets the target file to maximum download priority and all other
+// files to "do not download". This ensures qBittorrent only downloads pieces
+// belonging to the streaming file, rather than sequentially from piece 0.
+func (q *QBittorrentAdapter) focusFile(ctx context.Context, hash string, targetIndex int, totalFiles int) {
+	// Set non-target files to "do not download" (priority 0)
+	skipIDs := make([]string, 0, totalFiles-1)
+	for i := 0; i < totalFiles; i++ {
+		if i != targetIndex {
+			skipIDs = append(skipIDs, strconv.Itoa(i))
+		}
+	}
+	if len(skipIDs) > 0 {
+		form := url.Values{}
+		form.Set("hash", hash)
+		form.Set("id", strings.Join(skipIDs, "|"))
+		form.Set("priority", "0")
+		resp, err := q.doRequest(ctx, http.MethodPost, "/api/v2/torrents/filePrio", form.Encode())
+		if err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	// Set target file to maximum priority (7)
+	form := url.Values{}
+	form.Set("hash", hash)
+	form.Set("id", strconv.Itoa(targetIndex))
+	form.Set("priority", "7")
+	resp, err := q.doRequest(ctx, http.MethodPost, "/api/v2/torrents/filePrio", form.Encode())
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
+// removeOtherTorrents deletes all torrents except the one being streamed,
+// freeing bandwidth and disk space for the active stream.
+func (q *QBittorrentAdapter) removeOtherTorrents(ctx context.Context, keepHash string) {
+	torrents, err := q.getTorrentInfo(ctx, "")
+	if err != nil {
+		return
+	}
+	for _, t := range torrents {
+		if strings.ToLower(t.Hash) != keepHash {
+			_ = q.RemoveTorrent(ctx, t.Hash, true)
+		}
+	}
 }
 
 // torrentInfoFromQBittorrent converts qBittorrent API responses to our TorrentInfo type.
