@@ -166,6 +166,38 @@ func (q *QBittorrentAdapter) doRequest(ctx context.Context, method, path string,
 	return resp, nil
 }
 
+func (q *QBittorrentAdapter) PreloadTorrent(ctx context.Context, magnetURI string) (*TorrentInfo, error) {
+	info, err := q.AddTorrent(ctx, magnetURI)
+	if err != nil {
+		return nil, err
+	}
+	// Set all files to "do not download" so only metadata is cached.
+	// StreamFile.focusFile() will set the target file to priority 7 when playback starts.
+	q.pauseAllFiles(ctx, info.InfoHash, len(info.Files))
+	return info, nil
+}
+
+// pauseAllFiles sets all file priorities to 0 ("do not download"), preventing
+// qBittorrent from downloading any file data. Used by PreloadTorrent to ensure
+// only metadata is resolved during pre-warming.
+func (q *QBittorrentAdapter) pauseAllFiles(ctx context.Context, hash string, totalFiles int) {
+	if totalFiles == 0 {
+		return
+	}
+	ids := make([]string, totalFiles)
+	for i := 0; i < totalFiles; i++ {
+		ids[i] = strconv.Itoa(i)
+	}
+	form := url.Values{}
+	form.Set("hash", hash)
+	form.Set("id", strings.Join(ids, "|"))
+	form.Set("priority", "0")
+	resp, err := q.doRequest(ctx, http.MethodPost, "/api/v2/torrents/filePrio", form.Encode())
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
 func (q *QBittorrentAdapter) AddTorrent(ctx context.Context, magnetURI string) (*TorrentInfo, error) {
 	infoHash := ParseInfoHashFromMagnet(magnetURI)
 	if infoHash == "" {

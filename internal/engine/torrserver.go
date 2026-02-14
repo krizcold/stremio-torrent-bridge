@@ -64,6 +64,10 @@ func (t *TorrServerAdapter) Name() string {
 	return "torrserver"
 }
 
+func (t *TorrServerAdapter) PreloadTorrent(ctx context.Context, magnetURI string) (*TorrentInfo, error) {
+	return t.AddTorrent(ctx, magnetURI)
+}
+
 func (t *TorrServerAdapter) AddTorrent(ctx context.Context, magnetURI string) (*TorrentInfo, error) {
 	reqBody := torrServerRequest{
 		Action: "add",

@@ -73,6 +73,11 @@ type Engine interface {
 	// AddTorrent sends a magnet link to the engine. Must be idempotent.
 	AddTorrent(ctx context.Context, magnetURI string) (*TorrentInfo, error)
 
+	// PreloadTorrent adds a torrent for metadata resolution only.
+	// No file data should be downloaded. Engines that don't distinguish
+	// between metadata and data download can delegate to AddTorrent.
+	PreloadTorrent(ctx context.Context, magnetURI string) (*TorrentInfo, error)
+
 	// StreamFile proxies the video stream from the engine.
 	// req is the original HTTP request - adapter forwards Range headers.
 	StreamFile(ctx context.Context, infoHash string, fileIndex int, req *http.Request) (*StreamResponse, error)

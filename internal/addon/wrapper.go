@@ -282,12 +282,12 @@ func (w *Wrapper) HandleStream(c *fiber.Ctx) {
 			}
 		}
 
-		// Fire-and-forget: register the torrent with the engine so it starts
-		// downloading metadata/pieces. If this fails the stream URL still
-		// works -- the engine will add the torrent lazily on first request.
+		// Fire-and-forget: pre-warm the torrent metadata so the engine has it
+		// ready when the user clicks play. No file data is downloaded here --
+		// actual downloading begins in StreamFile when playback is requested.
 		go func(magnet string) {
-			if _, err := w.engine.AddTorrent(context.Background(), magnet); err != nil {
-				fmt.Printf("wrapper: background add torrent: %v\n", err)
+			if _, err := w.engine.PreloadTorrent(context.Background(), magnet); err != nil {
+				fmt.Printf("wrapper: background preload torrent: %v\n", err)
 			}
 		}(magnetURI)
 

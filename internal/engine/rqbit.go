@@ -92,6 +92,10 @@ func (r *RqbitAdapter) Name() string {
 	return "rqbit"
 }
 
+func (r *RqbitAdapter) PreloadTorrent(ctx context.Context, magnetURI string) (*TorrentInfo, error) {
+	return r.AddTorrent(ctx, magnetURI)
+}
+
 func (r *RqbitAdapter) AddTorrent(ctx context.Context, magnetURI string) (*TorrentInfo, error) {
 	// Extract info hash from the magnet URI for idempotency check
 	infoHash := ParseInfoHashFromMagnet(magnetURI)
