@@ -178,16 +178,21 @@ func (q *QBittorrentAdapter) PreloadTorrent(ctx context.Context, magnetURI strin
 		return existing, nil
 	}
 
-	// Add the torrent in STOPPED state so it registers with qBittorrent
-	// without consuming any bandwidth or connections. StreamFile will resume
-	// it when the user actually clicks play. This prevents the fire-and-forget
-	// preload of 20-30 streams from flooding the system with active downloads.
+	// Add with stop_condition=MetadataReceived: qBittorrent connects to peers,
+	// resolves metadata (file list, piece hashes), then automatically pauses
+	// before downloading any file data. Ideal for fire-and-forget preload of
+	// 20-30 streams — metadata resolves in parallel without wasting bandwidth.
+	// StreamFile resumes the torrent when the user actually clicks play.
+	//
+	// sequentialDownload and firstLastPiecePrio are set at add-time because the
+	// toggle APIs are not idempotent. They're harmless during the paused metadata
+	// phase and take effect immediately when StreamFile resumes the torrent.
 	form := url.Values{}
 	form.Set("urls", magnetURI)
+	form.Set("savepath", q.downloadPath)
+	form.Set("stop_condition", "MetadataReceived")
 	form.Set("sequentialDownload", "true")
 	form.Set("firstLastPiecePrio", "true")
-	form.Set("savepath", q.downloadPath)
-	form.Set("stopped", "true")
 
 	resp, err := q.doRequest(ctx, http.MethodPost, "/api/v2/torrents/add", form.Encode())
 	if err != nil {
@@ -292,13 +297,13 @@ func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fi
 
 	targetFile := files[fileIndex]
 
-	// Resume the torrent if it was added in stopped state by PreloadTorrent.
+	// Resume the torrent — PreloadTorrent adds with stop_condition=MetadataReceived
+	// which auto-pauses after metadata resolves. We need it active for downloading.
 	q.resumeTorrent(ctx, hash)
 
-	// Focus all bandwidth on the target file: set it to max priority,
+	// Focus all bandwidth on the target file: set it to high priority,
 	// set all other files to "do not download". This ensures qBittorrent
-	// downloads pieces for the streaming file first instead of sequentially
-	// from the start of the entire torrent.
+	// downloads pieces for the streaming file first.
 	q.focusFile(ctx, hash, fileIndex, len(files))
 
 	// Remove all other torrents to free bandwidth and disk resources.
@@ -352,9 +357,9 @@ func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fi
 		fileOffset += files[i].Size
 	}
 
-	// Wait for the file to appear on disk. PreloadTorrent sets all files to
-	// priority 0 (no allocation), so the file is created only after focusFile
-	// raises the priority.
+	// Wait for the file to appear on disk. The file may not exist yet because
+	// PreloadTorrent auto-pauses after metadata (no allocation happens until
+	// resume + focusFile raises the priority).
 	if err := q.waitForFileReady(ctx, filePath, 60*time.Second); err != nil {
 		return nil, fmt.Errorf("qbittorrent stream: %w", err)
 	}
@@ -747,15 +752,31 @@ func (r *pieceAwareReader) waitForPiece(pieceIdx int) error {
 }
 
 func (r *pieceAwareReader) Close() error {
+	// Pause the torrent when the stream ends (user stopped watching / closed tab).
+	// This prevents abandoned downloads from consuming bandwidth indefinitely.
+	// The data stays on disk — if the user plays again, StreamFile resumes it.
+	// Use a detached context since the request context is likely already cancelled.
+	r.q.pauseTorrent(context.Background(), r.hash)
 	return r.closer.Close()
 }
 
-// resumeTorrent resumes a torrent that was added in stopped state by
-// PreloadTorrent. This is a no-op if the torrent is already active.
+// resumeTorrent resumes a torrent that was auto-paused by stop_condition=MetadataReceived.
+// No-op if the torrent is already active.
 func (q *QBittorrentAdapter) resumeTorrent(ctx context.Context, hash string) {
 	form := url.Values{}
 	form.Set("hashes", hash)
 	resp, err := q.doRequest(ctx, http.MethodPost, "/api/v2/torrents/resume", form.Encode())
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
+// pauseTorrent pauses a torrent so it stops downloading but retains its data.
+// Used for session cleanup when the user stops watching.
+func (q *QBittorrentAdapter) pauseTorrent(ctx context.Context, hash string) {
+	form := url.Values{}
+	form.Set("hashes", hash)
+	resp, err := q.doRequest(ctx, http.MethodPost, "/api/v2/torrents/pause", form.Encode())
 	if err == nil {
 		resp.Body.Close()
 	}
@@ -783,11 +804,15 @@ func (q *QBittorrentAdapter) focusFile(ctx context.Context, hash string, targetI
 		}
 	}
 
-	// Set target file to maximum priority (7)
+	// Set target file to normal priority (1). We intentionally avoid priority 7
+	// ("maximal") because it disables sequential download for that file's pieces
+	// in libtorrent — the sequential and firstLastPiece features share the same
+	// piece-priority subsystem. Priority 1 with all others at 0 achieves the
+	// same focus effect without breaking sequential ordering.
 	form := url.Values{}
 	form.Set("hash", hash)
 	form.Set("id", strconv.Itoa(targetIndex))
-	form.Set("priority", "7")
+	form.Set("priority", "1")
 	resp, err := q.doRequest(ctx, http.MethodPost, "/api/v2/torrents/filePrio", form.Encode())
 	if err == nil {
 		resp.Body.Close()
