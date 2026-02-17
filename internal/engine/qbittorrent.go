@@ -266,7 +266,7 @@ func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fi
 	// so the torrent may not exist yet when Stremio requests the stream.
 	var torrents []qbitTorrentInfo
 	var files []qbitFileInfo
-	deadline := time.Now().Add(90 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for {
 		var err error
 		torrents, err = q.getTorrentInfo(ctx, hash)
@@ -308,34 +308,105 @@ func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fi
 	// within the torrent, potentially including the torrent name as a prefix.
 	filePath := filepath.Join(q.downloadPath, targetFile.Name)
 
-	// Skip piece waiting if the torrent is already fully downloaded
-	if torrents[0].Progress < 1.0 {
-		if err := q.waitForPieces(ctx, hash, fileIndex, 60*time.Second); err != nil {
-			return nil, fmt.Errorf("qbittorrent stream: %w", err)
+	// Use the metadata-reported file size rather than os.Stat, since the
+	// file may be sparse/pre-allocated during download.
+	totalSize := targetFile.Size
+	contentType := detectContentType(targetFile.Name)
+
+	// For fully downloaded torrents, serve directly without piece awareness.
+	if torrents[0].Progress >= 1.0 {
+		f, err := os.Open(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("qbittorrent stream: open file: %w", err)
 		}
+		return q.buildStreamResponse(f, nil, totalSize, contentType, 0, req)
 	}
 
-	// Open the file from the shared volume
+	// Get piece size for the piece-aware reader. This is needed to map
+	// byte positions to piece indices.
+	var pieceSize int64
+	for attempt := 0; attempt < 10; attempt++ {
+		var err error
+		pieceSize, err = q.getPieceSize(ctx, hash)
+		if err == nil && pieceSize > 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	if pieceSize == 0 {
+		return nil, fmt.Errorf("qbittorrent stream: could not determine piece size for %s", hash)
+	}
+
+	// Calculate the byte offset of this file within the torrent.
+	// Torrent files are stored sequentially; sum sizes of preceding files.
+	var fileOffset int64
+	for i := 0; i < fileIndex; i++ {
+		fileOffset += files[i].Size
+	}
+
+	// Wait for the file to appear on disk. PreloadTorrent sets all files to
+	// priority 0 (no allocation), so the file is created only after focusFile
+	// raises the priority.
+	if err := q.waitForFileReady(ctx, filePath, 60*time.Second); err != nil {
+		return nil, fmt.Errorf("qbittorrent stream: %w", err)
+	}
+
+	// Open the file from the shared volume.
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("qbittorrent stream: open file: %w", err)
 	}
 
-	stat, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, fmt.Errorf("qbittorrent stream: stat file: %w", err)
+	// Parse Range header first to determine start position.
+	rangeHeader := req.Header.Get("Range")
+	var startPos int64
+	if rangeHeader != "" {
+		start, _, err := parseRangeHeader(rangeHeader, totalSize)
+		if err != nil {
+			f.Close()
+			return nil, fmt.Errorf("qbittorrent stream: %w", err)
+		}
+		startPos = start
 	}
 
-	totalSize := stat.Size()
-	contentType := detectContentType(targetFile.Name)
+	// Wrap the file in a piece-aware reader that blocks Read() calls until
+	// the underlying piece has been downloaded. This replaces the old
+	// waitForPieces(5) gate — instead of blocking upfront, we start the HTTP
+	// response immediately and block incrementally as the player reads.
+	par := &pieceAwareReader{
+		q:           q,
+		ctx:         ctx,
+		hash:        hash,
+		pos:         startPos,
+		fileOffset:  fileOffset,
+		pieceSize:   pieceSize,
+		lastPieceOK: -1,
+	}
 
-	// Handle Range header for partial content support
+	return q.buildStreamResponse(f, par, totalSize, contentType, startPos, req)
+}
+
+// buildStreamResponse constructs a StreamResponse with proper Range handling.
+// The reader wraps the underlying file; closer is called to release the file.
+func (q *QBittorrentAdapter) buildStreamResponse(f *os.File, par *pieceAwareReader, totalSize int64, contentType string, startPos int64, req *http.Request) (*StreamResponse, error) {
 	rangeHeader := req.Header.Get("Range")
+
 	if rangeHeader == "" {
-		// No Range header: serve the whole file
+		// No Range header: serve the whole file.
+		var body io.ReadCloser
+		if par != nil {
+			par.inner = f
+			par.closer = f
+			body = par
+		} else {
+			body = f
+		}
 		return &StreamResponse{
-			Body:          f,
+			Body:          body,
 			ContentLength: totalSize,
 			ContentType:   contentType,
 			StatusCode:    http.StatusOK,
@@ -360,8 +431,19 @@ func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fi
 		return nil, fmt.Errorf("qbittorrent stream: seek: %w", err)
 	}
 
+	limited := io.LimitReader(f, contentLength)
+
+	var body io.ReadCloser
+	if par != nil {
+		par.inner = limited
+		par.closer = f
+		body = par
+	} else {
+		body = &limitedReadCloser{Reader: limited, Closer: f}
+	}
+
 	return &StreamResponse{
-		Body:          &limitedReadCloser{Reader: io.LimitReader(f, contentLength), Closer: f},
+		Body:          body,
 		ContentLength: contentLength,
 		ContentType:   contentType,
 		StatusCode:    http.StatusPartialContent,
@@ -507,136 +589,142 @@ func (q *QBittorrentAdapter) getFiles(ctx context.Context, hash string) ([]qbitF
 	return files, nil
 }
 
-// waitForPieces polls the piece states until the initial pieces for the target
-// file are downloaded, enabling streaming to begin. Returns an error if the
-// timeout elapses before pieces are ready.
-func (q *QBittorrentAdapter) waitForPieces(ctx context.Context, hash string, fileIndex int, timeout time.Duration) error {
+// fetchPieceStates retrieves the download state of all pieces for a torrent.
+// Each element is 0 (not downloaded), 1 (downloading), or 2 (downloaded).
+func (q *QBittorrentAdapter) fetchPieceStates(ctx context.Context, hash string) ([]int, error) {
+	resp, err := q.doRequest(ctx, http.MethodGet, "/api/v2/torrents/pieceStates?hash="+hash, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read piece states: %w", err)
+	}
+
+	var states []int
+	if err := json.Unmarshal(data, &states); err != nil {
+		return nil, fmt.Errorf("parse piece states: %w", err)
+	}
+	return states, nil
+}
+
+// getPieceSize fetches the piece size from /api/v2/torrents/properties.
+// qBittorrent v5.x omits piece_size from /api/v2/torrents/info, so we
+// must use /properties instead.
+func (q *QBittorrentAdapter) getPieceSize(ctx context.Context, hash string) (int64, error) {
+	resp, err := q.doRequest(ctx, http.MethodGet, "/api/v2/torrents/properties?hash="+hash, "")
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("read properties: %w", err)
+	}
+
+	var props struct {
+		PieceSize int64 `json:"piece_size"`
+	}
+	if err := json.Unmarshal(data, &props); err != nil {
+		return 0, fmt.Errorf("parse properties: %w", err)
+	}
+	return props.PieceSize, nil
+}
+
+// waitForFileReady waits for the file to appear on disk after focusFile sets
+// its priority. qBittorrent doesn't allocate files with priority 0 (from
+// PreloadTorrent), so the file may not exist until priority is raised.
+func (q *QBittorrentAdapter) waitForFileReady(ctx context.Context, filePath string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-
-	// We need at least the first few pieces of the file to start streaming.
-	// The number of required pieces depends on piece size, but 5 is a
-	// reasonable minimum for most video formats.
-	const minPieces = 5
-
 	for time.Now().Before(deadline) {
-		// Get piece size from /api/v2/torrents/properties (not available in /info)
-		propResp, err := q.doRequest(ctx, http.MethodGet, "/api/v2/torrents/properties?hash="+hash, "")
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(500 * time.Millisecond):
-				continue
-			}
-		}
-		propData, err := io.ReadAll(propResp.Body)
-		propResp.Body.Close()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(500 * time.Millisecond):
-				continue
-			}
-		}
-		var props struct {
-			PieceSize int64 `json:"piece_size"`
-		}
-		if err := json.Unmarshal(propData, &props); err != nil || props.PieceSize == 0 {
-			// Metadata not yet available, wait and retry
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(500 * time.Millisecond):
-				continue
-			}
-		}
-
-		pieceSize := props.PieceSize
-
-		// Get the file list to determine which pieces belong to our file
-		files, err := q.getFiles(ctx, hash)
-		if err != nil || fileIndex >= len(files) {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(500 * time.Millisecond):
-				continue
-			}
-		}
-
-		// Calculate the byte offset of the target file within the torrent.
-		// Files are stored sequentially, so sum sizes of preceding files.
-		var fileOffset int64
-		for i := 0; i < fileIndex; i++ {
-			fileOffset += files[i].Size
-		}
-
-		// Determine the starting piece index for this file
-		startPiece := int(fileOffset / pieceSize)
-
-		// How many pieces do we need? At most minPieces, but no more than
-		// the total number of pieces for this file.
-		filePieces := int((files[fileIndex].Size + pieceSize - 1) / pieceSize)
-		needed := minPieces
-		if filePieces < needed {
-			needed = filePieces
-		}
-
-		// Get piece states
-		resp, err := q.doRequest(ctx, http.MethodGet, "/api/v2/torrents/pieceStates?hash="+hash, "")
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(500 * time.Millisecond):
-				continue
-			}
-		}
-
-		data, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(500 * time.Millisecond):
-				continue
-			}
-		}
-
-		var pieceStates []int
-		if err := json.Unmarshal(data, &pieceStates); err != nil || len(pieceStates) == 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(500 * time.Millisecond):
-				continue
-			}
-		}
-
-		// Check if the first N pieces of the file are downloaded (state == 2)
-		ready := true
-		for i := 0; i < needed; i++ {
-			pieceIdx := startPiece + i
-			if pieceIdx >= len(pieceStates) || pieceStates[pieceIdx] != 2 {
-				ready = false
-				break
-			}
-		}
-
-		if ready {
+		if _, err := os.Stat(filePath); err == nil {
 			return nil
 		}
-
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+	return fmt.Errorf("timeout waiting for file to appear: %s", filePath)
+}
 
-	return fmt.Errorf("timeout waiting for initial pieces to download (hash=%s, fileIndex=%d)", hash, fileIndex)
+// pieceAwareReader wraps an io.Reader and blocks Read() calls until the
+// underlying torrent piece has been downloaded by qBittorrent. This allows
+// the HTTP response to start immediately — the video player sees headers
+// right away and handles buffering itself, while the reader blocks only
+// when it reaches not-yet-downloaded data.
+type pieceAwareReader struct {
+	inner       io.Reader
+	closer      io.Closer
+	q           *QBittorrentAdapter
+	ctx         context.Context
+	hash        string
+	pos         int64 // current byte position within the file
+	fileOffset  int64 // byte offset of this file within the torrent
+	pieceSize   int64
+	lastPieceOK int // highest piece index confirmed downloaded (-1 = unknown)
+}
+
+func (r *pieceAwareReader) Read(p []byte) (int, error) {
+	// Map the current file position to a torrent piece index.
+	torrentPos := r.fileOffset + r.pos
+	pieceIdx := int(torrentPos / r.pieceSize)
+
+	// Fast path: piece already confirmed downloaded — no API call needed.
+	if pieceIdx > r.lastPieceOK {
+		// Slow path: check piece states and wait if necessary.
+		if err := r.waitForPiece(pieceIdx); err != nil {
+			return 0, err
+		}
+	}
+
+	n, err := r.inner.Read(p)
+	r.pos += int64(n)
+	return n, err
+}
+
+// waitForPiece polls piece states until the given piece is downloaded (state 2).
+// It also scans forward to find the contiguous downloaded range and caches the
+// result in lastPieceOK, so subsequent reads within downloaded data are free.
+func (r *pieceAwareReader) waitForPiece(pieceIdx int) error {
+	for {
+		states, err := r.q.fetchPieceStates(r.ctx, r.hash)
+		if err != nil {
+			select {
+			case <-r.ctx.Done():
+				return r.ctx.Err()
+			case <-time.After(300 * time.Millisecond):
+				continue
+			}
+		}
+
+		if pieceIdx < len(states) && states[pieceIdx] == 2 {
+			// Scan forward to find contiguous downloaded range.
+			r.lastPieceOK = pieceIdx
+			for i := pieceIdx + 1; i < len(states); i++ {
+				if states[i] == 2 {
+					r.lastPieceOK = i
+				} else {
+					break
+				}
+			}
+			return nil
+		}
+
+		select {
+		case <-r.ctx.Done():
+			return r.ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+}
+
+func (r *pieceAwareReader) Close() error {
+	return r.closer.Close()
 }
 
 // focusFile sets the target file to maximum download priority and all other
