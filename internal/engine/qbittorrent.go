@@ -167,35 +167,36 @@ func (q *QBittorrentAdapter) doRequest(ctx context.Context, method, path string,
 }
 
 func (q *QBittorrentAdapter) PreloadTorrent(ctx context.Context, magnetURI string) (*TorrentInfo, error) {
-	info, err := q.AddTorrent(ctx, magnetURI)
-	if err != nil {
-		return nil, err
+	infoHash := ParseInfoHashFromMagnet(magnetURI)
+	if infoHash == "" {
+		return nil, fmt.Errorf("qbittorrent preload: could not parse info hash from magnet URI")
 	}
-	// Set all files to "do not download" so only metadata is cached.
-	// StreamFile.focusFile() will set the target file to priority 7 when playback starts.
-	q.pauseAllFiles(ctx, info.InfoHash, len(info.Files))
-	return info, nil
-}
 
-// pauseAllFiles sets all file priorities to 0 ("do not download"), preventing
-// qBittorrent from downloading any file data. Used by PreloadTorrent to ensure
-// only metadata is resolved during pre-warming.
-func (q *QBittorrentAdapter) pauseAllFiles(ctx context.Context, hash string, totalFiles int) {
-	if totalFiles == 0 {
-		return
+	// Check if the torrent already exists — no need to re-add.
+	existing, _ := q.GetTorrent(ctx, infoHash)
+	if existing != nil {
+		return existing, nil
 	}
-	ids := make([]string, totalFiles)
-	for i := 0; i < totalFiles; i++ {
-		ids[i] = strconv.Itoa(i)
-	}
+
+	// Add the torrent in STOPPED state so it registers with qBittorrent
+	// without consuming any bandwidth or connections. StreamFile will resume
+	// it when the user actually clicks play. This prevents the fire-and-forget
+	// preload of 20-30 streams from flooding the system with active downloads.
 	form := url.Values{}
-	form.Set("hash", hash)
-	form.Set("id", strings.Join(ids, "|"))
-	form.Set("priority", "0")
-	resp, err := q.doRequest(ctx, http.MethodPost, "/api/v2/torrents/filePrio", form.Encode())
-	if err == nil {
-		resp.Body.Close()
+	form.Set("urls", magnetURI)
+	form.Set("sequentialDownload", "true")
+	form.Set("firstLastPiecePrio", "true")
+	form.Set("savepath", q.downloadPath)
+	form.Set("stopped", "true")
+
+	resp, err := q.doRequest(ctx, http.MethodPost, "/api/v2/torrents/add", form.Encode())
+	if err != nil {
+		return nil, fmt.Errorf("qbittorrent preload: %w", err)
 	}
+	defer resp.Body.Close()
+	io.ReadAll(resp.Body)
+
+	return &TorrentInfo{InfoHash: infoHash}, nil
 }
 
 func (q *QBittorrentAdapter) AddTorrent(ctx context.Context, magnetURI string) (*TorrentInfo, error) {
@@ -291,6 +292,9 @@ func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fi
 
 	targetFile := files[fileIndex]
 
+	// Resume the torrent if it was added in stopped state by PreloadTorrent.
+	q.resumeTorrent(ctx, hash)
+
 	// Focus all bandwidth on the target file: set it to max priority,
 	// set all other files to "do not download". This ensures qBittorrent
 	// downloads pieces for the streaming file first instead of sequentially
@@ -373,10 +377,29 @@ func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fi
 		startPos = start
 	}
 
+	// Wait for the first piece at the requested position before starting the
+	// HTTP response. Video players expect data to arrive shortly after headers
+	// are sent — a stalled body often causes "Video is not supported" errors.
+	// This waits for just 1 piece (not 5 like the old approach), keeping
+	// startup fast while ensuring the player gets real data immediately.
+	startPiece := int((fileOffset + startPos) / pieceSize)
+	for {
+		states, err := q.fetchPieceStates(ctx, hash)
+		if err == nil && startPiece < len(states) && states[startPiece] == 2 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			f.Close()
+			return nil, ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+
 	// Wrap the file in a piece-aware reader that blocks Read() calls until
-	// the underlying piece has been downloaded. This replaces the old
-	// waitForPieces(5) gate — instead of blocking upfront, we start the HTTP
-	// response immediately and block incrementally as the player reads.
+	// the underlying piece has been downloaded. After the first piece wait
+	// above, subsequent reads flow smoothly through already-downloaded data
+	// and only block when reaching the download frontier.
 	par := &pieceAwareReader{
 		q:           q,
 		ctx:         ctx,
@@ -725,6 +748,17 @@ func (r *pieceAwareReader) waitForPiece(pieceIdx int) error {
 
 func (r *pieceAwareReader) Close() error {
 	return r.closer.Close()
+}
+
+// resumeTorrent resumes a torrent that was added in stopped state by
+// PreloadTorrent. This is a no-op if the torrent is already active.
+func (q *QBittorrentAdapter) resumeTorrent(ctx context.Context, hash string) {
+	form := url.Values{}
+	form.Set("hashes", hash)
+	resp, err := q.doRequest(ctx, http.MethodPost, "/api/v2/torrents/resume", form.Encode())
+	if err == nil {
+		resp.Body.Close()
+	}
 }
 
 // focusFile sets the target file to maximum download priority and all other
