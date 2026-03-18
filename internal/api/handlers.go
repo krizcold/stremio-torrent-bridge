@@ -200,7 +200,7 @@ func (h *Handlers) HandleUpdateAddon(c *fiber.Ctx) {
 		if !addon.ValidFetchMethods[*req.FetchMethod] {
 			c.Status(http.StatusBadRequest)
 			c.Set("Content-Type", "application/json")
-			c.SendString(`{"error":"fetchMethod must be one of: global, sw_fallback, tab_relay, sw_only, direct, proxy"}`)
+			c.SendString(`{"error":"fetchMethod must be one of: global, tab_relay, direct, proxy"}`)
 			return
 		}
 		if err := h.store.UpdateFetchMethod(id, *req.FetchMethod); err != nil {
@@ -315,7 +315,7 @@ func (h *Handlers) HandleUpdateConfig(c *fiber.Ctx) {
 		if !addon.ValidGlobalFetchMethods[*req.DefaultFetchMethod] {
 			c.Status(http.StatusBadRequest)
 			c.Set("Content-Type", "application/json")
-			c.SendString(`{"error":"defaultFetchMethod must be one of: sw_fallback, tab_relay, sw_only, direct, proxy"}`)
+			c.SendString(`{"error":"defaultFetchMethod must be one of: tab_relay, direct, proxy"}`)
 			return
 		}
 		h.config.DefaultFetchMethod = *req.DefaultFetchMethod
@@ -496,14 +496,14 @@ func (h *Handlers) HandleHealthCheck(c *fiber.Ctx) {
 		case relayConnected || cached:
 			item.Status = "degraded"
 			if !item.DirectReachable && effective == "direct" {
-				item.Recommendation = "Direct fetch is blocked. Switch to Tab Relay or SW + Fallback."
+				item.Recommendation = "This addon is Cloudflare-protected. Switch to Browser Tab Relay (keep this tab open) or a Custom Proxy."
 			} else if !relayConnected && effective == "tab_relay" {
-				item.Recommendation = "Relay disconnected. Keep this tab open or switch to Direct."
+				item.Recommendation = "Relay disconnected. Keep this tab open while using Stremio."
 			}
 		default:
 			item.Status = "failing"
-			if effective == "direct" || effective == "sw_fallback" {
-				item.Recommendation = "Addon is unreachable. Switch to Tab Relay and keep this tab open."
+			if effective == "direct" {
+				item.Recommendation = "This addon is Cloudflare-protected and unreachable. Switch to Browser Tab Relay (keep this tab open) or a Custom Proxy."
 			} else if effective == "tab_relay" {
 				item.Recommendation = "Relay disconnected. Keep this tab open while using Stremio."
 			}
@@ -568,54 +568,6 @@ func (h *Handlers) HandleTorrentStats(c *fiber.Ctx) {
 	c.Send(out)
 }
 
-// --- service worker endpoints ------------------------------------------------
-
-// swConfigResponse is the JSON returned to the Service Worker so it knows
-// which addons are wrapped and how to reach the bridge.
-type swConfigResponse struct {
-	BridgeBaseURL      string         `json:"bridgeBaseURL"`
-	DefaultFetchMethod string         `json:"defaultFetchMethod"`
-	Addons             []swAddonEntry `json:"addons"`
-}
-
-type swAddonEntry struct {
-	WrapID      string `json:"wrapId"`
-	OriginalURL string `json:"originalUrl"`
-	FetchMethod string `json:"fetchMethod"` // Resolved: never "global", always the effective method
-}
-
-// HandleSWConfig handles GET /sw/config.json.
-// Returns configuration for the injected Service Worker.
-func (h *Handlers) HandleSWConfig(c *fiber.Ctx) {
-	addons := h.store.List()
-	externalBase := resolveExternalURL(h.config, c)
-
-	entries := make([]swAddonEntry, 0, len(addons))
-	for _, a := range addons {
-		// Resolve "global" to the actual default method.
-		method := a.FetchMethod
-		if method == "" || method == addon.FetchMethodGlobal {
-			method = h.config.DefaultFetchMethod
-		}
-		entries = append(entries, swAddonEntry{
-			WrapID:      a.ID,
-			OriginalURL: a.OriginalURL,
-			FetchMethod: method,
-		})
-	}
-
-	resp := swConfigResponse{
-		BridgeBaseURL:      externalBase,
-		DefaultFetchMethod: h.config.DefaultFetchMethod,
-		Addons:             entries,
-	}
-
-	out, _ := json.Marshal(resp)
-	c.Set("Content-Type", "application/json")
-	c.Set("Cache-Control", "no-cache")
-	c.Set("Access-Control-Allow-Origin", "*")
-	c.Send(out)
-}
 
 // fetchAddonName fetches a manifest URL and extracts the "name" field to
 // update the addon store. Best-effort; failures are silently logged.

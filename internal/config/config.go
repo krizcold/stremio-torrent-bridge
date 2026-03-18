@@ -29,7 +29,7 @@ type Config struct {
 	QBitPassword       string // env: QBITTORRENT_PASSWORD, default: "adminadmin"
 
 	// Fetch proxy
-	DefaultFetchMethod string // env: DEFAULT_FETCH_METHOD, default: "sw_fallback"
+	DefaultFetchMethod string // env: DEFAULT_FETCH_METHOD, default: "direct"
 	ProxyURL           string // env: PROXY_URL, default: "" (for custom proxy fetch method)
 
 	// Cache
@@ -60,7 +60,7 @@ func Load() *Config {
 		QBitPassword:     "adminadmin",
 
 		// Fetch proxy defaults
-		DefaultFetchMethod: "sw_fallback",
+		DefaultFetchMethod: "direct",
 		ProxyURL:           "",
 
 		// Cache defaults

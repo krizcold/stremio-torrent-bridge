@@ -71,12 +71,6 @@ func RegisterRoutes(router AddonRouter, h *Handlers, w *addonpkg.Wrapper, sp *pr
 	router.AddEndpoint("POST", "/api/relay/response/:id", rs.HandleResponse)
 	router.AddEndpoint("GET", "/api/relay/status", rs.HandleStatus)
 
-	// --- Service Worker routes ------------------------------------------------
-	// These must be publicly accessible (no auth hash required).
-	// nginx-hash-lock ALLOWED_PATHS includes "sw".
-
-	router.AddEndpoint("GET", "/sw/config.json", h.HandleSWConfig)
-
 	// --- UI routes (embedded static files) -----------------------------------
 
 	router.AddEndpoint("GET", "/ui/*", func(c *fiber.Ctx) {

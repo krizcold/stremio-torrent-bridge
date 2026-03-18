@@ -18,10 +18,8 @@ let currentAddonsList = null;
 
 // Fetch method descriptions for the hint text
 const fetchMethodHints = {
-    sw_fallback: 'Service Worker intercepts addon requests in the browser; falls back to server-side fetch if SW is unavailable. Works with Cloudflare-protected addons when using Stremio Web.',
-    tab_relay: 'Bridge UI tab acts as a relay for addon requests using your browser\'s IP. Requires this tab to stay open while streaming.',
-    sw_only: 'All addon fetching through Service Worker only. No server-side fallback. Requires Stremio Web with SW injection configured.',
-    direct: 'Server fetches from addons directly using the PCS server IP. Does NOT work with Cloudflare-protected addons (e.g., Torrentio).',
+    tab_relay: 'Bridge UI tab acts as a relay for addon requests using your browser\'s IP. Requires this tab to stay open while streaming. Works with Cloudflare-protected addons.',
+    direct: 'Server fetches from addons directly using the PCS server IP. Works for most addons. If an addon is Cloudflare-protected (e.g., Torrentio), switch to Browser Tab Relay or Custom Proxy.',
     proxy: 'Server fetches through a custom HTTP/SOCKS proxy. Useful if you have a residential proxy or VPN.',
 };
 
@@ -76,9 +74,8 @@ function updateProxyVisibility() {
 // Browser Tab Relay
 // ---------------------------------------------------------------------------
 
-// Check if any addon explicitly uses tab_relay and needs the relay active.
-// For sw_fallback, the relay works opportunistically if the tab is open but
-// we don't force-start it or show the banner.
+// Check if any addon uses tab_relay and needs the relay active.
+// If so, auto-start the relay and show the banner.
 async function checkRelayNeeded() {
     try {
         const [configResp, addonsResp] = await Promise.all([
@@ -90,7 +87,7 @@ async function checkRelayNeeded() {
         const config = await configResp.json();
         const addons = await addonsResp.json();
 
-        const globalMethod = config.defaultFetchMethod || 'sw_fallback';
+        const globalMethod = config.defaultFetchMethod || 'direct';
 
         // Relay is only required when an addon explicitly uses tab_relay.
         let needRelay = false;
@@ -247,7 +244,7 @@ async function loadConfig() {
 
         // Populate form fields
         document.getElementById('engine-select').value = config.defaultEngine || 'torrserver';
-        document.getElementById('fetch-method-select').value = config.defaultFetchMethod || 'sw_fallback';
+        document.getElementById('fetch-method-select').value = config.defaultFetchMethod || 'direct';
         document.getElementById('proxy-url').value = config.proxyURL || '';
         document.getElementById('cache-size').value = config.cacheSizeGB || 50;
         document.getElementById('cache-age').value = config.cacheMaxAgeDays || 30;
@@ -259,7 +256,7 @@ async function loadConfig() {
         // Store saved config for unsaved changes detection
         savedConfig = {
             defaultEngine: config.defaultEngine || 'torrserver',
-            defaultFetchMethod: config.defaultFetchMethod || 'sw_fallback',
+            defaultFetchMethod: config.defaultFetchMethod || 'direct',
             proxyURL: config.proxyURL || '',
             cacheSizeGB: config.cacheSizeGB || 50,
             cacheMaxAgeDays: config.cacheMaxAgeDays || 30,
@@ -407,9 +404,7 @@ function checkUnsavedChanges() {
 // Fetch method labels for display
 const fetchMethodLabels = {
     global: 'Use Global',
-    sw_fallback: 'SW + Fallback',
     tab_relay: 'Tab Relay',
-    sw_only: 'SW Only',
     direct: 'PCS-IP Only',
     proxy: 'Custom Proxy',
 };
@@ -651,7 +646,7 @@ async function validateAddons(addons) {
             healthMap[h.id] = h;
         }
 
-        const globalMethod = config.defaultFetchMethod || 'sw_fallback';
+        const globalMethod = config.defaultFetchMethod || 'direct';
 
         for (const addon of addons) {
             const validationEl = document.getElementById('addon-validation-' + addon.id);
@@ -688,7 +683,7 @@ async function revalidateAddon(addonId, newMethod) {
             healthMap[h.id] = h;
         }
 
-        const globalMethod = config.defaultFetchMethod || 'sw_fallback';
+        const globalMethod = config.defaultFetchMethod || 'direct';
         const effectiveMethod = (newMethod === 'global' || !newMethod)
             ? globalMethod : newMethod;
 
@@ -718,42 +713,7 @@ function buildValidationHTML(method, health, config) {
                 });
                 items.push({
                     type: 'hint',
-                    text: 'Switch to SW + Fallback or Tab Relay for Cloudflare-protected addons.'
-                });
-            }
-            break;
-
-        case 'sw_fallback':
-            items.push({
-                type: 'info',
-                text: 'SW requires Stremio Web (PCS) with nginx SW injection in your Stremio docker-compose.'
-            });
-            if (directReachable === true) {
-                items.push({
-                    type: 'pass',
-                    text: 'Fallback (PCS-IP): reachable \u2014 works even without SW'
-                });
-            } else if (directReachable === false) {
-                items.push({
-                    type: 'fail',
-                    text: 'Fallback (PCS-IP): blocked' + (directError ? ' (' + directError + ')' : '')
-                });
-                items.push({
-                    type: 'hint',
-                    text: 'Without SW injection, this addon will not load. Set up nginx injection or switch to Tab Relay.'
-                });
-            }
-            break;
-
-        case 'sw_only':
-            items.push({
-                type: 'info',
-                text: 'Requires Stremio Web (PCS) with nginx SW injection. No server-side fallback.'
-            });
-            if (directReachable === false) {
-                items.push({
-                    type: 'warn',
-                    text: 'PCS-IP cannot reach this addon \u2014 SW is the only way to access it.'
+                    text: 'Switch to Tab Relay for Cloudflare-protected addons.'
                 });
             }
             break;

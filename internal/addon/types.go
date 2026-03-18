@@ -4,12 +4,10 @@ import "time"
 
 // Valid fetch method values.
 const (
-	FetchMethodGlobal     = "global"      // Use the global default
-	FetchMethodSWFallback = "sw_fallback" // Service Worker with server-side fallback
-	FetchMethodTabRelay   = "tab_relay"   // Browser Tab Relay via WebSocket
-	FetchMethodSWOnly     = "sw_only"     // Service Worker only, no fallback
-	FetchMethodDirect     = "direct"      // Server-side fetch (PCS-IP only)
-	FetchMethodProxy      = "proxy"       // Server-side fetch through custom proxy
+	FetchMethodGlobal   = "global"    // Use the global default
+	FetchMethodTabRelay = "tab_relay" // Browser Tab Relay via HTTP long-polling
+	FetchMethodDirect   = "direct"    // Server-side fetch (PCS-IP only)
+	FetchMethodProxy    = "proxy"     // Server-side fetch through custom proxy
 )
 
 // Valid fetch status values.
@@ -21,21 +19,17 @@ const (
 
 // ValidFetchMethods lists all valid per-addon fetch methods (includes "global").
 var ValidFetchMethods = map[string]bool{
-	FetchMethodGlobal:     true,
-	FetchMethodSWFallback: true,
-	FetchMethodTabRelay:   true,
-	FetchMethodSWOnly:     true,
-	FetchMethodDirect:     true,
-	FetchMethodProxy:      true,
+	FetchMethodGlobal:   true,
+	FetchMethodTabRelay: true,
+	FetchMethodDirect:   true,
+	FetchMethodProxy:    true,
 }
 
 // ValidGlobalFetchMethods lists valid global default methods (excludes "global").
 var ValidGlobalFetchMethods = map[string]bool{
-	FetchMethodSWFallback: true,
-	FetchMethodTabRelay:   true,
-	FetchMethodSWOnly:     true,
-	FetchMethodDirect:     true,
-	FetchMethodProxy:      true,
+	FetchMethodTabRelay: true,
+	FetchMethodDirect:   true,
+	FetchMethodProxy:    true,
 }
 
 // WrappedAddon represents a wrapped Stremio addon configuration

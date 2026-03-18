@@ -384,19 +384,7 @@ func (w *Wrapper) fetchForAddon(addonID, rawURL string) ([]byte, error) {
 	switch method {
 	case FetchMethodTabRelay:
 		return w.fetchViaRelay(rawURL)
-	case FetchMethodSWFallback:
-		// Try relay if connected with a short timeout; fall back to direct quickly.
-		if w.relay != nil && w.relay.Connected() {
-			data, statusCode, err := w.relay.Fetch(rawURL, 5*time.Second)
-			if err == nil && statusCode >= 200 && statusCode < 300 {
-				return data, nil
-			}
-			fmt.Printf("wrapper: relay fetch failed (fallback to direct): %v\n", err)
-		}
-		return w.fetchJSON(rawURL)
-	case FetchMethodDirect, FetchMethodSWOnly:
-		// sw_only: SW handles it client-side; if the request reaches the server
-		// it means SW isn't active, so we do a direct fetch as last resort.
+	case FetchMethodDirect:
 		return w.fetchJSON(rawURL)
 	case FetchMethodProxy:
 		// TODO: proxy support will be added later

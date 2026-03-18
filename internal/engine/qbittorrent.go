@@ -27,8 +27,9 @@ type QBittorrentAdapter struct {
 	password     string
 	client       *http.Client
 
-	mu  sync.Mutex
-	sid string // Session ID cookie from /api/v2/auth/login
+	mu      sync.Mutex
+	sid     string            // Session ID cookie from /api/v2/auth/login
+	magnets map[string]string // infoHash → magnet URI, saved by PreloadTorrent for StreamFile
 }
 
 // NewQBittorrentAdapter creates a new qBittorrent engine adapter.
@@ -41,6 +42,7 @@ func NewQBittorrentAdapter(baseURL, downloadPath, username, password string) *QB
 		username:     username,
 		password:     password,
 		client:       httpclient.New(),
+		magnets:      make(map[string]string),
 	}
 }
 
@@ -167,39 +169,18 @@ func (q *QBittorrentAdapter) doRequest(ctx context.Context, method, path string,
 }
 
 func (q *QBittorrentAdapter) PreloadTorrent(ctx context.Context, magnetURI string) (*TorrentInfo, error) {
+	// No-op for qBittorrent: just parse and cache the magnet URI without adding
+	// anything. Adding 20-30 torrents during browse causes visible download
+	// activity even with stop_condition (libtorrent starts pieces before the
+	// stop triggers). StreamFile adds the torrent when the user actually plays.
 	infoHash := ParseInfoHashFromMagnet(magnetURI)
 	if infoHash == "" {
 		return nil, fmt.Errorf("qbittorrent preload: could not parse info hash from magnet URI")
 	}
 
-	// Check if the torrent already exists — no need to re-add.
-	existing, _ := q.GetTorrent(ctx, infoHash)
-	if existing != nil {
-		return existing, nil
-	}
-
-	// Add with stop_condition=MetadataReceived: qBittorrent connects to peers,
-	// resolves metadata (file list, piece hashes), then automatically pauses
-	// before downloading any file data. Ideal for fire-and-forget preload of
-	// 20-30 streams — metadata resolves in parallel without wasting bandwidth.
-	// StreamFile resumes the torrent when the user actually clicks play.
-	//
-	// sequentialDownload and firstLastPiecePrio are set at add-time because the
-	// toggle APIs are not idempotent. They're harmless during the paused metadata
-	// phase and take effect immediately when StreamFile resumes the torrent.
-	form := url.Values{}
-	form.Set("urls", magnetURI)
-	form.Set("savepath", q.downloadPath)
-	form.Set("stop_condition", "MetadataReceived")
-	form.Set("sequentialDownload", "true")
-	form.Set("firstLastPiecePrio", "true")
-
-	resp, err := q.doRequest(ctx, http.MethodPost, "/api/v2/torrents/add", form.Encode())
-	if err != nil {
-		return nil, fmt.Errorf("qbittorrent preload: %w", err)
-	}
-	defer resp.Body.Close()
-	io.ReadAll(resp.Body)
+	q.mu.Lock()
+	q.magnets[infoHash] = magnetURI
+	q.mu.Unlock()
 
 	return &TorrentInfo{InfoHash: infoHash}, nil
 }
@@ -267,9 +248,36 @@ func (q *QBittorrentAdapter) AddTorrent(ctx context.Context, magnetURI string) (
 func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fileIndex int, req *http.Request) (*StreamResponse, error) {
 	hash := strings.ToLower(infoHash)
 
-	// Wait for the torrent to appear and have metadata resolved.
-	// The wrapper adds torrents asynchronously (fire-and-forget goroutine),
-	// so the torrent may not exist yet when Stremio requests the stream.
+	// Add the torrent to qBittorrent now that the user has clicked play.
+	// PreloadTorrent only cached the magnet URI without adding anything,
+	// so this is the first time qBittorrent sees this torrent.
+	q.mu.Lock()
+	magnetURI := q.magnets[hash]
+	delete(q.magnets, hash) // consumed
+	q.mu.Unlock()
+
+	if magnetURI != "" {
+		form := url.Values{}
+		form.Set("urls", magnetURI)
+		form.Set("sequentialDownload", "true")
+		form.Set("firstLastPiecePrio", "true")
+		form.Set("savepath", q.downloadPath)
+		resp, err := q.doRequest(ctx, http.MethodPost, "/api/v2/torrents/add", form.Encode())
+		if err != nil {
+			return nil, fmt.Errorf("qbittorrent stream: add torrent: %w", err)
+		}
+		resp.Body.Close()
+	} else {
+		// No cached magnet — torrent may already exist from a previous session
+		// or AddTorrent call. Try to resume it in case it was paused.
+		q.resumeTorrent(ctx, hash)
+	}
+
+	// Remove all other torrents to free bandwidth and disk resources.
+	// Run in background to not delay the stream start.
+	go q.removeOtherTorrents(ctx, hash)
+
+	// Wait for metadata to resolve (file list available).
 	var torrents []qbitTorrentInfo
 	var files []qbitFileInfo
 	deadline := time.Now().Add(60 * time.Second)
@@ -297,18 +305,10 @@ func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fi
 
 	targetFile := files[fileIndex]
 
-	// Resume the torrent — PreloadTorrent adds with stop_condition=MetadataReceived
-	// which auto-pauses after metadata resolves. We need it active for downloading.
-	q.resumeTorrent(ctx, hash)
-
 	// Focus all bandwidth on the target file: set it to high priority,
 	// set all other files to "do not download". This ensures qBittorrent
 	// downloads pieces for the streaming file first.
 	q.focusFile(ctx, hash, fileIndex, len(files))
-
-	// Remove all other torrents to free bandwidth and disk resources.
-	// Run in background to not delay the stream start.
-	go q.removeOtherTorrents(ctx, hash)
 
 	// Construct the local file path. qBittorrent saves files at:
 	//   save_path/torrent_name/file_name  (for multi-file torrents)

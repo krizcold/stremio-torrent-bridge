@@ -1,27 +1,36 @@
 name: stremiotorrentbridge
 
 services:
-# Web UI Proxy (nginx-hash-lock protection)
+  # Web UI Proxy (nginx-hash-lock protection)
   stremiotorrentbridge:
-    image: ghcr.io/yundera/nginx-hash-lock:latest
+    image: ghcr.io/yundera/nginx-hash-lock:1.0.5
     container_name: stremio-bridge-ui
-    hostname: stremiobridge
     restart: unless-stopped
     cpu_shares: 80
-    user: "root"
+    user: "0:0"
     expose:
-      - 80
+      - "80"
+    labels:
+      caddy_0: stremiotorrentbridge-${APP_DOMAIN}
+      caddy_0.import: gateway_tls
+      caddy_0.reverse_proxy: "{{upstreams 80}}"
+      caddy_1: stremiotorrentbridge-${APP_PUBLIC_IP_DASH}.nip.io
+      caddy_1.import: gateway_tls
+      caddy_1.reverse_proxy: "{{upstreams 80}}"
+      caddy_2: stremiotorrentbridge-${APP_PUBLIC_IP_DASH}.sslip.io
+      caddy_2.reverse_proxy: "{{upstreams 80}}"
     environment:
       BACKEND_HOST: "bridge"
       BACKEND_PORT: "8080"
       LISTEN_PORT: "80"
       AUTH_HASH: "$AUTH_HASH"
-      ALLOWED_PATHS: "wrap,stream,sw"
+      ALLOWED_PATHS: "wrap,stream"
     tmpfs:
       - /var/cache/nginx:size=100M
     depends_on:
       - bridge
     networks:
+      - bridge-internal
       - pcs
 
   # Bridge Service (Addon Wrapper + Router)
@@ -39,17 +48,17 @@ services:
       - "qbittorrent:host-gateway"
     environment:
       TORRENT_ENGINE: "${TORRENT_ENGINE:-qbittorrent}"
-      BRIDGE_EXTERNAL_URL: "https://stremiotorrentbridge-${PCS_DOMAIN}"
+      BRIDGE_EXTERNAL_URL: "https://stremiotorrentbridge-${APP_DOMAIN}"
       TORRSERVER_URL: "http://torrserver:8090"
       TORRSERVER_USERNAME: "bridge"
-      TORRSERVER_PASSWORD: "$PCS_DEFAULT_PASSWORD"
+      TORRSERVER_PASSWORD: "$APP_DEFAULT_PASSWORD"
       RQBIT_URL: "http://rqbit:3030"
       RQBIT_USERNAME: "bridge"
-      RQBIT_PASSWORD: "$PCS_DEFAULT_PASSWORD"
+      RQBIT_PASSWORD: "$APP_DEFAULT_PASSWORD"
       QBITTORRENT_URL: "http://qbittorrent:8080"
       QBITTORRENT_DOWNLOAD_PATH: "/downloads"
       QBITTORRENT_USERNAME: "admin"
-      QBITTORRENT_PASSWORD: "$PCS_DEFAULT_PASSWORD"
+      QBITTORRENT_PASSWORD: "$APP_DEFAULT_PASSWORD"
       CACHE_SIZE_GB: "${CACHE_SIZE_GB:-60}"
       CACHE_MAX_AGE_DAYS: "${CACHE_MAX_AGE_DAYS:-7}"
       TZ: "$TZ"
@@ -59,7 +68,7 @@ services:
     depends_on:
       - torrserver
     networks:
-      - pcs
+      - bridge-internal
     x-casaos:
       envs:
         - container: TORRENT_ENGINE
@@ -87,7 +96,6 @@ services:
     command:
       - |
         printf '{"bridge":"%s"}' "$$TS_AUTH_PASSWORD" > "$$TS_CONF_PATH/accs.db"
-        PUB_IPV6=$$(wget -qO- https://api6.ipify.org 2>/dev/null || true)
         mkdir -p "$$TS_CONF_PATH" "$$TS_TORR_DIR"
         touch "$$TS_LOG_PATH"
         printf '%s' '{"BitTorr":{"CacheSize":268435456,"ReaderReadAHead":95,"PreloadCache":5,"UseDisk":true,"TorrentsSavePath":"","RemoveCacheOnDrop":false,"ForceEncrypt":false,"RetrackersMode":1,"TorrentDisconnectTimeout":300,"EnableDebug":false,"EnableDLNA":false,"FriendlyName":"","EnableRutorSearch":false,"EnableTorznabSearch":false,"TorznabUrls":null,"EnableIPv6":true,"DisableTCP":false,"DisableUTP":false,"DisableUPNP":false,"DisableDHT":false,"DisablePEX":false,"DisableUpload":false,"DownloadRateLimit":0,"UploadRateLimit":0,"ConnectionsLimit":150,"PeersListenPort":42069,"SslPort":0,"SslCert":"","SslKey":"","ResponsiveMode":true,"ShowFSActiveTorr":true,"StoreSettingsInJson":true,"StoreViewedInJson":false}}' > "$$TS_CONF_PATH/settings.json"
@@ -99,7 +107,8 @@ services:
       TS_PORT: "8090"
       TS_DONTKILL: "1"
       TS_HTTPAUTH: "1"
-      TS_AUTH_PASSWORD: "$PCS_DEFAULT_PASSWORD"
+      TS_AUTH_PASSWORD: "$APP_DEFAULT_PASSWORD"
+      PUB_IPV6: "$APP_PUBLIC_IPV6"
     volumes:
       - /DATA/AppData/stremiotorrentbridge/torrserver/config:/opt/ts/config
       - /DATA/AppData/stremiotorrentbridge/torrserver/cache:/opt/ts/torrents
@@ -113,7 +122,7 @@ services:
     network_mode: host
     command: server start --listen-port 4240 /downloads
     environment:
-      RQBIT_HTTP_BASIC_AUTH_USERPASS: "bridge:$PCS_DEFAULT_PASSWORD"
+      RQBIT_HTTP_BASIC_AUTH_USERPASS: "bridge:$APP_DEFAULT_PASSWORD"
     volumes:
       - /DATA/AppData/stremiotorrentbridge/rqbit/downloads:/downloads
       - /DATA/AppData/stremiotorrentbridge/rqbit/config:/root/.config/rqbit
@@ -160,13 +169,16 @@ services:
       PGID: "$PGID"
       TZ: "$TZ"
       WEBUI_PORT: "8080"
-      QBT_PASSWORD: "$PCS_DEFAULT_PASSWORD"
+      QBT_PASSWORD: "$APP_DEFAULT_PASSWORD"
     volumes:
       - /DATA/AppData/stremiotorrentbridge/qbittorrent/config:/config
       - /DATA/AppData/stremiotorrentbridge/qbittorrent/downloads:/downloads
 
 networks:
+  bridge-internal:
+    driver: bridge
   pcs:
+    name: pcs
     external: true
 
 x-casaos:
@@ -174,12 +186,17 @@ x-casaos:
     - amd64
     - arm64
   main: stremiotorrentbridge
+  webui_port: 80
+  index: /?hash=$AUTH_HASH
+  is_uncontrolled: false
   author: kriz_cold
   developer: kriz_cold
+  category: Entertainment
   icon: https://cdn.jsdelivr.net/gh/Yundera/AppStore@main/Apps/stremio-torrent-bridge/icon.png
+  title:
+    en_us: "Stremio Torrent Bridge"
   tagline:
     en_us: "Full-peer torrent streaming for Stremio"
-  category: Entertainment
   description:
     en_us: |
       Stremio Torrent Bridge wraps Stremio addons (like Torrentio) to provide
@@ -188,29 +205,70 @@ x-casaos:
 
       Features:
       - Wrap any Stremio addon for full peer connectivity
-      - Triple-engine: TorrServer (default), rqbit (low memory), qBittorrent (max speed)
+      - Triple-engine: TorrServer, rqbit (low memory), qBittorrent (max speed)
       - HTTP streaming with seek support (Range requests)
+      - Browser Tab Relay for Cloudflare-protected addons
       - Automatic LRU cache management
       - Management UI for addon configuration
 
-      Default engine: TorrServer
-      Change via TORRENT_ENGINE environment variable on "bridge" service.
-  title:
-    en_us: "Stremio Torrent Bridge"
-  is_uncontrolled: false
-  index: /?hash=$AUTH_HASH
-  port_map: "80"
+      Default engine: qBittorrent
+      Change via TORRENT_ENGINE environment variable on the "bridge" service.
+    fr_fr: |
+      Stremio Torrent Bridge enveloppe les addons Stremio (comme Torrentio) pour
+      offrir un streaming torrent amélioré avec une connectivité complète TCP/UDP,
+      résolvant la limitation WebRTC intégrée de Stremio qui ne se connecte qu'à ~2% des pairs.
+    es_es: |
+      Stremio Torrent Bridge envuelve los addons de Stremio (como Torrentio) para
+      proporcionar streaming de torrent mejorado con conectividad completa TCP/UDP,
+      resolviendo la limitación WebRTC incorporada de Stremio que solo se conecta a ~2% de los pares.
+    ko_kr: |
+      Stremio Torrent Bridge는 Stremio 애드온(예: Torrentio)을 래핑하여
+      전체 TCP/UDP 피어 연결을 통한 향상된 토렌트 스트리밍을 제공합니다.
+      Stremio의 내장 WebRTC 제한(~2%의 피어에만 연결)을 해결합니다.
+    zh_cn: |
+      Stremio Torrent Bridge 包装 Stremio 插件（如 Torrentio），提供
+      具有完整 TCP/UDP 对等连接的增强型种子流媒体，解决了
+      Stremio 内置 WebRTC 仅连接约 2% 对等节点的限制。
   tips:
     before_install:
       en_us: |
-        Access: `https://${REF_DOMAIN}/`
-
+        **Setup:**
         1. Open the Bridge UI
         2. Paste a Stremio addon manifest URL (e.g., Torrentio)
         3. Copy the wrapped URL and install it in Stremio
-        4. Enjoy full peer connectivity!
+        4. Keep the Bridge UI tab open for Cloudflare-protected addons (Tab Relay)
 
-        Change the torrent engine via TORRENT_ENGINE on the "bridge" service:
-        - `torrserver` (default) - Easy setup, IPv6 support
-        - `rqbit` - Low memory usage, great for Raspberry Pi
-        - `qbittorrent` - Maximum download speed, ISP throttle bypass
+        **Torrent Engine** (change via TORRENT_ENGINE on "bridge" service):
+        - `qbittorrent` (default) - Maximum download speed
+        - `torrserver` - Easy setup, IPv6 support
+        - `rqbit` - Low memory usage
+
+        **Peer Ports** (exposed via host networking):
+        - TorrServer: `42069` (TCP/UDP)
+        - rqbit: `4240` (TCP/UDP)
+        - qBittorrent: `6881` (TCP/UDP)
+      fr_fr: |
+        **Configuration :**
+        1. Ouvrez l'interface Bridge
+        2. Collez l'URL du manifest d'un addon Stremio (ex: Torrentio)
+        3. Copiez l'URL modifiée et installez-la dans Stremio
+        4. Gardez l'onglet Bridge ouvert pour les addons protégés par Cloudflare
+      es_es: |
+        **Configuración:**
+        1. Abra la interfaz del Bridge
+        2. Pegue la URL del manifest de un addon de Stremio (ej: Torrentio)
+        3. Copie la URL modificada e instálela en Stremio
+        4. Mantenga la pestaña del Bridge abierta para addons protegidos por Cloudflare
+      ko_kr: |
+        **설정:**
+        1. Bridge UI를 엽니다
+        2. Stremio 애드온 매니페스트 URL을 붙여넣기 (예: Torrentio)
+        3. 래핑된 URL을 복사하여 Stremio에 설치
+        4. Cloudflare 보호 애드온을 위해 Bridge UI 탭을 열어둡니다
+      zh_cn: |
+        **设置：**
+        1. 打开 Bridge UI
+        2. 粘贴 Stremio 插件清单 URL（例如 Torrentio）
+        3. 复制包装后的 URL 并安装到 Stremio
+        4. 为受 Cloudflare 保护的插件保持 Bridge UI 标签页打开
+  store_app_id: stremiotorrentbridge
