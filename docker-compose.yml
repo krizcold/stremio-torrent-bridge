@@ -155,6 +155,7 @@ services:
     command: server start --listen-port 4240 /downloads
     environment:
       RQBIT_HTTP_BASIC_AUTH_USERPASS: "bridge:$APP_DEFAULT_PASSWORD"
+      RQBIT_HTTP_API_LISTEN_ADDR: "0.0.0.0:3030"
       # Mirrored for the healthcheck below — rqbit itself ignores this var
       RQBIT_HEALTHCHECK_PASSWORD: "$APP_DEFAULT_PASSWORD"
     volumes:
