@@ -1,13 +1,17 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 )
 
 // Config holds all configuration for the stremio-torrent-bridge
 type Config struct {
+	mu sync.Mutex
+
 	// Server
 	BindAddr    string // env: BIND_ADDR, default: "0.0.0.0"
 	Port        int    // env: PORT, default: 8080
@@ -38,6 +42,17 @@ type Config struct {
 
 	// Storage
 	DataDir string // env: DATA_DIR, default: "/data"
+
+	persistentLoaded bool
+}
+
+// persistentFields is the on-disk JSON shape: only user-settable fields.
+type persistentFields struct {
+	DefaultEngine      *string `json:"defaultEngine,omitempty"`
+	DefaultFetchMethod *string `json:"defaultFetchMethod,omitempty"`
+	ProxyURL           *string `json:"proxyURL,omitempty"`
+	CacheSizeGB        *int    `json:"cacheSizeGB,omitempty"`
+	CacheMaxAgeDays    *int    `json:"cacheMaxAgeDays,omitempty"`
 }
 
 // Load creates a new Config with defaults and overrides from environment variables
@@ -60,7 +75,7 @@ func Load() *Config {
 		QBitPassword:     "adminadmin",
 
 		// Fetch proxy defaults
-		DefaultFetchMethod: "direct",
+		DefaultFetchMethod: "tab_relay",
 		ProxyURL:           "",
 
 		// Cache defaults
@@ -136,7 +151,88 @@ func Load() *Config {
 		c.DataDir = v
 	}
 
+	// Overlay persisted values last so they win over env defaults.
+	if err := c.LoadPersistent(); err != nil {
+		fmt.Printf("config: load persistent: %v\n", err)
+	}
+
 	return c
+}
+
+// LoadPersistent reads the persisted JSON file (if present) and overlays its
+// values onto the config. Missing file is not an error.
+func (c *Config) LoadPersistent() error {
+	data, err := os.ReadFile(c.persistentPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	var p persistentFields
+	if err := json.Unmarshal(data, &p); err != nil {
+		return fmt.Errorf("parse persistent config: %w", err)
+	}
+
+	if p.DefaultEngine != nil {
+		c.DefaultEngine = *p.DefaultEngine
+	}
+	if p.DefaultFetchMethod != nil {
+		c.DefaultFetchMethod = *p.DefaultFetchMethod
+	}
+	if p.ProxyURL != nil {
+		c.ProxyURL = *p.ProxyURL
+	}
+	if p.CacheSizeGB != nil {
+		c.CacheSizeGB = *p.CacheSizeGB
+	}
+	if p.CacheMaxAgeDays != nil {
+		c.CacheMaxAgeDays = *p.CacheMaxAgeDays
+	}
+	c.persistentLoaded = true
+	return nil
+}
+
+// Save writes user-settable config fields to a JSON file under DataDir.
+// Write is atomic (temp file + rename) and mutex-guarded for concurrent callers.
+func (c *Config) Save() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	engine := c.DefaultEngine
+	fetch := c.DefaultFetchMethod
+	proxy := c.ProxyURL
+	size := c.CacheSizeGB
+	age := c.CacheMaxAgeDays
+
+	p := persistentFields{
+		DefaultEngine:      &engine,
+		DefaultFetchMethod: &fetch,
+		ProxyURL:           &proxy,
+		CacheSizeGB:        &size,
+		CacheMaxAgeDays:    &age,
+	}
+
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal persistent config: %w", err)
+	}
+
+	path := c.persistentPath()
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return fmt.Errorf("write persistent config: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("rename persistent config: %w", err)
+	}
+	return nil
+}
+
+func (c *Config) persistentPath() string {
+	return c.DataDir + "/config.json"
 }
 
 // LogSummary prints key configuration values for startup logging
@@ -159,4 +255,9 @@ func (c *Config) LogSummary() {
 	}
 	fmt.Printf("  Cache:           %d GB, max age %d days\n", c.CacheSizeGB, c.CacheMaxAgeDays)
 	fmt.Printf("  Data Directory:  %s\n", c.DataDir)
+	if c.persistentLoaded {
+		fmt.Printf("  Persistent:      loaded from %s\n", c.persistentPath())
+	} else {
+		fmt.Printf("  Persistent:      none (first boot or no overrides)\n")
+	}
 }

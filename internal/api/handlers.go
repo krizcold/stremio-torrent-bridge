@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber"
@@ -22,17 +23,19 @@ type Handlers struct {
 	store        *addon.AddonStore
 	config       *config.Config
 	engine       engine.Engine
+	multi        *engine.MultiEngine
 	cacheManager *cache.CacheManager // may be nil
 	wrapper      *addon.Wrapper      // for health check (manifest cache status)
 	relay        *relay.Server       // for health check (relay status)
 }
 
 // NewHandlers creates a new Handlers instance wired to the given dependencies.
-func NewHandlers(store *addon.AddonStore, cfg *config.Config, eng engine.Engine, cm *cache.CacheManager, w *addon.Wrapper, rs *relay.Server) *Handlers {
+func NewHandlers(store *addon.AddonStore, cfg *config.Config, eng engine.Engine, multi *engine.MultiEngine, cm *cache.CacheManager, w *addon.Wrapper, rs *relay.Server) *Handlers {
 	return &Handlers{
 		store:        store,
 		config:       cfg,
 		engine:       eng,
+		multi:        multi,
 		cacheManager: cm,
 		wrapper:      w,
 		relay:        rs,
@@ -65,6 +68,7 @@ type listAddonItem struct {
 type engineStatus struct {
 	URL    string `json:"url"`
 	Status string `json:"status"`
+	Active bool   `json:"active"`
 }
 
 type configResponse struct {
@@ -235,17 +239,42 @@ func (h *Handlers) HandleGetConfig(c *fiber.Ctx) {
 		},
 	}
 
-	// Ping the active engine to get its live status.
-	if es, ok := engines[h.engine.Name()]; ok {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-
-		if err := h.engine.Ping(ctx); err != nil {
-			es.Status = "offline"
-		} else {
-			es.Status = "online"
-		}
+	active := ""
+	if h.multi != nil {
+		active = h.multi.GetActive()
+	} else {
+		active = h.engine.Name()
 	}
+	if es, ok := engines[active]; ok {
+		es.Active = true
+	}
+
+	var wg sync.WaitGroup
+	for name, es := range engines {
+		name, es := name, es
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			var adapter engine.Engine
+			if h.multi != nil {
+				adapter = h.multi.Adapter(name)
+			} else if name == h.engine.Name() {
+				adapter = h.engine
+			}
+			if adapter == nil {
+				return
+			}
+			if err := adapter.Ping(ctx); err != nil {
+				es.Status = "offline"
+			} else {
+				es.Status = "online"
+			}
+		}()
+	}
+	wg.Wait()
 
 	resp := configResponse{
 		DefaultEngine:      h.config.DefaultEngine,
@@ -262,7 +291,7 @@ func (h *Handlers) HandleGetConfig(c *fiber.Ctx) {
 }
 
 // HandleUpdateConfig handles PUT /api/config.
-// It applies partial runtime configuration updates (not persisted to disk).
+// It applies partial runtime configuration updates and persists them to disk.
 func (h *Handlers) HandleUpdateConfig(c *fiber.Ctx) {
 	var req updateConfigRequest
 	if err := json.Unmarshal([]byte(c.Body()), &req); err != nil {
@@ -272,23 +301,19 @@ func (h *Handlers) HandleUpdateConfig(c *fiber.Ctx) {
 		return
 	}
 
-	// Validate defaultEngine if provided.
-	if req.DefaultEngine != nil {
-		valid := map[string]bool{
-			"torrserver":  true,
-			"rqbit":       true,
-			"qbittorrent": true,
-		}
-		if !valid[*req.DefaultEngine] {
-			c.Status(http.StatusBadRequest)
-			c.Set("Content-Type", "application/json")
-			c.SendString(`{"error":"defaultEngine must be one of: torrserver, rqbit, qbittorrent"}`)
-			return
+	if req.DefaultEngine != nil && *req.DefaultEngine != h.config.DefaultEngine {
+		if h.multi != nil {
+			if err := h.multi.SetActive(*req.DefaultEngine); err != nil {
+				c.Status(http.StatusBadRequest)
+				c.Set("Content-Type", "application/json")
+				errJSON, _ := json.Marshal(map[string]string{"error": err.Error()})
+				c.Send(errJSON)
+				return
+			}
 		}
 		h.config.DefaultEngine = *req.DefaultEngine
 	}
 
-	// Validate cacheSizeGB if provided.
 	if req.CacheSizeGB != nil {
 		if *req.CacheSizeGB <= 0 {
 			c.Status(http.StatusBadRequest)
@@ -299,7 +324,6 @@ func (h *Handlers) HandleUpdateConfig(c *fiber.Ctx) {
 		h.config.CacheSizeGB = *req.CacheSizeGB
 	}
 
-	// Validate cacheMaxAgeDays if provided.
 	if req.CacheMaxAgeDays != nil {
 		if *req.CacheMaxAgeDays <= 0 {
 			c.Status(http.StatusBadRequest)
@@ -310,7 +334,6 @@ func (h *Handlers) HandleUpdateConfig(c *fiber.Ctx) {
 		h.config.CacheMaxAgeDays = *req.CacheMaxAgeDays
 	}
 
-	// Validate defaultFetchMethod if provided.
 	if req.DefaultFetchMethod != nil {
 		if !addon.ValidGlobalFetchMethods[*req.DefaultFetchMethod] {
 			c.Status(http.StatusBadRequest)
@@ -321,33 +344,39 @@ func (h *Handlers) HandleUpdateConfig(c *fiber.Ctx) {
 		h.config.DefaultFetchMethod = *req.DefaultFetchMethod
 	}
 
-	// Update proxyURL if provided.
 	if req.ProxyURL != nil {
 		h.config.ProxyURL = *req.ProxyURL
 	}
 
-	// Return the updated config using the same format as GET /api/config,
-	// but skip the engine ping for speed.
+	if err := h.config.Save(); err != nil {
+		fmt.Printf("handlers: persist config: %v\n", err)
+	}
+
+	engines := map[string]*engineStatus{
+		"torrserver": {
+			URL:    h.config.TorrServerURL,
+			Status: "unknown",
+		},
+		"rqbit": {
+			URL:    h.config.RqbitURL,
+			Status: "unknown",
+		},
+		"qbittorrent": {
+			URL:    h.config.QBittorrentURL,
+			Status: "unknown",
+		},
+	}
+	if es, ok := engines[h.config.DefaultEngine]; ok {
+		es.Active = true
+	}
+
 	resp := configResponse{
 		DefaultEngine:      h.config.DefaultEngine,
 		DefaultFetchMethod: h.config.DefaultFetchMethod,
 		ProxyURL:           h.config.ProxyURL,
 		CacheSizeGB:        h.config.CacheSizeGB,
 		CacheMaxAgeDays:    h.config.CacheMaxAgeDays,
-		Engines: map[string]*engineStatus{
-			"torrserver": {
-				URL:    h.config.TorrServerURL,
-				Status: "unknown",
-			},
-			"rqbit": {
-				URL:    h.config.RqbitURL,
-				Status: "unknown",
-			},
-			"qbittorrent": {
-				URL:    h.config.QBittorrentURL,
-				Status: "unknown",
-			},
-		},
+		Engines:            engines,
 	}
 
 	out, _ := json.Marshal(resp)

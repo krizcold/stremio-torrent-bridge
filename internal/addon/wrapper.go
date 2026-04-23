@@ -2,11 +2,13 @@ package addon
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -39,13 +41,21 @@ type Wrapper struct {
 	externalURL string        // BRIDGE_EXTERNAL_URL or empty (falls back to Host header)
 	httpClient  *http.Client
 
+	// proxyMu guards proxyClient and proxyClientURL. The proxy client is built
+	// lazily on first use and rebuilt when the user updates cfg.ProxyURL, so
+	// config changes take effect without needing an addon-handler restart.
+	proxyMu         sync.Mutex
+	proxyClient     *http.Client // nil if no proxy URL configured or last build failed
+	proxyClientURL  string       // URL that proxyClient was built from
+
 	manifestMu    sync.RWMutex
 	manifestCache map[string][]byte // wrapID -> last known good modified manifest JSON
+	cacheFilePath string
 }
 
 // NewWrapper creates a Wrapper that proxies and rewrites Stremio addon responses.
 func NewWrapper(store *AddonStore, cfg *config.Config, eng engine.Engine, relayServer *relay.Server) *Wrapper {
-	return &Wrapper{
+	w := &Wrapper{
 		store:         store,
 		config:        cfg,
 		engine:        eng,
@@ -53,7 +63,22 @@ func NewWrapper(store *AddonStore, cfg *config.Config, eng engine.Engine, relayS
 		externalURL:   strings.TrimRight(cfg.ExternalURL, "/"),
 		httpClient:    httpclient.New(),
 		manifestCache: make(map[string][]byte),
+		cacheFilePath: cfg.DataDir + "/manifest_cache.json",
 	}
+
+	// Pre-build the proxy client if a proxy URL is configured. A parse failure
+	// here is non-fatal: fetchViaProxy falls back to direct fetch when nil.
+	if cfg.ProxyURL != "" {
+		if client, err := httpclient.NewProxied(cfg.ProxyURL); err != nil {
+			fmt.Printf("wrapper: build proxy client for %q: %v\n", cfg.ProxyURL, err)
+		} else {
+			w.proxyClient = client
+			w.proxyClientURL = cfg.ProxyURL
+		}
+	}
+
+	w.loadCache()
+	return w
 }
 
 // HandleManifest fetches the original addon manifest, rebrands it for the
@@ -112,6 +137,8 @@ func (w *Wrapper) HandleManifest(c *fiber.Ctx) {
 	}
 
 	// Rebrand: prefix the ID and name so it's clear this goes through the bridge.
+	// Top-level fields like logo, background, and icon are intentionally left
+	// untouched so Stremio still shows the upstream addon's artwork.
 	if origID, ok := manifest["id"].(string); ok {
 		manifest["id"] = "com.yundera.bridge." + origID
 	}
@@ -143,6 +170,9 @@ func (w *Wrapper) HandleManifest(c *fiber.Ctx) {
 	w.manifestMu.Lock()
 	w.manifestCache[wrapID] = out
 	w.manifestMu.Unlock()
+
+	// Persist so the cache survives container restarts.
+	go w.saveCache()
 
 	c.Set("Content-Type", "application/json")
 	c.Send(out)
@@ -333,6 +363,72 @@ func (w *Wrapper) HasCachedManifest(wrapID string) bool {
 	return w.manifestCache[wrapID] != nil
 }
 
+// loadCache reads the persisted manifest cache from disk into memory. A missing
+// file is not an error (first boot). Decode errors are logged and ignored so a
+// corrupt cache file can't crash startup.
+func (w *Wrapper) loadCache() {
+	if w.cacheFilePath == "" {
+		return
+	}
+	data, err := os.ReadFile(w.cacheFilePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Printf("wrapper: load manifest cache: %v\n", err)
+		}
+		return
+	}
+
+	var encoded map[string]string
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		fmt.Printf("wrapper: parse manifest cache: %v\n", err)
+		return
+	}
+
+	// base64 because the on-disk JSON can't hold raw []byte values directly.
+	w.manifestMu.Lock()
+	defer w.manifestMu.Unlock()
+	for id, b64 := range encoded {
+		decoded, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			fmt.Printf("wrapper: decode cached manifest for %s: %v\n", id, err)
+			continue
+		}
+		w.manifestCache[id] = decoded
+	}
+}
+
+// saveCache writes the current manifest cache to disk atomically. Runs under a
+// read lock only while snapshotting the map, so concurrent requests aren't
+// blocked by disk I/O.
+func (w *Wrapper) saveCache() {
+	if w.cacheFilePath == "" {
+		return
+	}
+
+	w.manifestMu.RLock()
+	snapshot := make(map[string]string, len(w.manifestCache))
+	for id, raw := range w.manifestCache {
+		snapshot[id] = base64.StdEncoding.EncodeToString(raw)
+	}
+	w.manifestMu.RUnlock()
+
+	data, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		fmt.Printf("wrapper: marshal manifest cache: %v\n", err)
+		return
+	}
+
+	tmp := w.cacheFilePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		fmt.Printf("wrapper: write manifest cache: %v\n", err)
+		return
+	}
+	if err := os.Rename(tmp, w.cacheFilePath); err != nil {
+		os.Remove(tmp)
+		fmt.Printf("wrapper: rename manifest cache: %v\n", err)
+	}
+}
+
 // getBaseURL strips the /manifest.json suffix (and any query string) from a
 // manifest URL to derive the addon's base URL.
 func getBaseURL(originalManifestURL string) string {
@@ -387,11 +483,49 @@ func (w *Wrapper) fetchForAddon(addonID, rawURL string) ([]byte, error) {
 	case FetchMethodDirect:
 		return w.fetchJSON(rawURL)
 	case FetchMethodProxy:
-		// TODO: proxy support will be added later
-		return w.fetchJSON(rawURL)
+		// Falls back to direct fetch if no valid proxy URL is configured.
+		// This is logged rather than erroring so users with a misconfigured
+		// proxy URL still get responses (albeit bypassing the proxy).
+		client := w.getProxyClient()
+		if client == nil {
+			fmt.Printf("wrapper: proxy requested but no proxy client available (ProxyURL=%q); falling back to direct\n", w.config.ProxyURL)
+			return w.fetchJSON(rawURL)
+		}
+		return w.fetchViaProxy(client, rawURL)
 	default:
 		return w.fetchJSON(rawURL)
 	}
+}
+
+// getProxyClient returns the current proxy client, rebuilding it if the
+// configured ProxyURL has changed since the last build. Returns nil if the
+// URL is empty or invalid, so callers can fall back gracefully.
+func (w *Wrapper) getProxyClient() *http.Client {
+	targetURL := w.config.ProxyURL
+
+	w.proxyMu.Lock()
+	defer w.proxyMu.Unlock()
+
+	if targetURL == "" {
+		// Config was cleared; drop any stale client.
+		w.proxyClient = nil
+		w.proxyClientURL = ""
+		return nil
+	}
+	if w.proxyClient != nil && w.proxyClientURL == targetURL {
+		return w.proxyClient
+	}
+
+	client, err := httpclient.NewProxied(targetURL)
+	if err != nil {
+		fmt.Printf("wrapper: rebuild proxy client for %q: %v\n", targetURL, err)
+		w.proxyClient = nil
+		w.proxyClientURL = targetURL // cache the failing URL so we don't retry every request
+		return nil
+	}
+	w.proxyClient = client
+	w.proxyClientURL = targetURL
+	return client
 }
 
 // fetchViaRelay sends the fetch request to the connected browser tab.
@@ -424,6 +558,32 @@ func (w *Wrapper) fetchJSON(rawURL string) ([]byte, error) {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("unexpected status %d from %s", resp.StatusCode, rawURL)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	return data, nil
+}
+
+// fetchViaProxy performs a GET request through the given proxy-aware client.
+// Structurally identical to fetchJSON; split so the client is a parameter.
+func (w *Wrapper) fetchViaProxy(client *http.Client, rawURL string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("proxy request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("proxy: unexpected status %d from %s", resp.StatusCode, rawURL)
 	}
 
 	data, err := io.ReadAll(resp.Body)

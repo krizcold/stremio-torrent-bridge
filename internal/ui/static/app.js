@@ -861,7 +861,7 @@ async function cleanupCache() {
 
         // Refresh cache stats and torrents list after cleanup
         loadCacheStats();
-        loadTorrents();
+        loadLiveStats();
     } catch (error) {
         console.error('Cache cleanup failed:', error);
         alert(`Cache cleanup failed: ${error.message}`);

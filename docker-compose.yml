@@ -32,8 +32,18 @@ services:
     networks:
       - bridge-internal
       - pcs
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   # Bridge Service (Addon Wrapper + Router)
+  # Note: project assets (including icon.png referenced in x-casaos) live under ./assets
   bridge:
     image: ghcr.io/krizcold/stremio-torrent-bridge:latest
     container_name: stremio-bridge
@@ -65,10 +75,17 @@ services:
     volumes:
       - /DATA/AppData/stremiotorrentbridge/bridge:/data
       - /DATA/AppData/stremiotorrentbridge/qbittorrent/downloads:/downloads:ro
-    depends_on:
-      - torrserver
     networks:
       - bridge-internal
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     x-casaos:
       envs:
         - container: TORRENT_ENGINE
@@ -112,6 +129,21 @@ services:
     volumes:
       - /DATA/AppData/stremiotorrentbridge/torrserver/config:/opt/ts/config
       - /DATA/AppData/stremiotorrentbridge/torrserver/cache:/opt/ts/torrents
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --tries=1 --timeout=3 --user=bridge --password=$$TS_AUTH_PASSWORD http://127.0.0.1:8090/echo || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   # Engine B: rqbit
   rqbit:
@@ -123,9 +155,26 @@ services:
     command: server start --listen-port 4240 /downloads
     environment:
       RQBIT_HTTP_BASIC_AUTH_USERPASS: "bridge:$APP_DEFAULT_PASSWORD"
+      # Mirrored for the healthcheck below — rqbit itself ignores this var
+      RQBIT_HEALTHCHECK_PASSWORD: "$APP_DEFAULT_PASSWORD"
     volumes:
       - /DATA/AppData/stremiotorrentbridge/rqbit/downloads:/downloads
       - /DATA/AppData/stremiotorrentbridge/rqbit/config:/root/.config/rqbit
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --tries=1 --timeout=3 --user=bridge --password=$$RQBIT_HEALTHCHECK_PASSWORD http://127.0.0.1:3030/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   # Engine C: qBittorrent
   qbittorrent:
@@ -173,6 +222,21 @@ services:
     volumes:
       - /DATA/AppData/stremiotorrentbridge/qbittorrent/config:/config
       - /DATA/AppData/stremiotorrentbridge/qbittorrent/downloads:/downloads
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --tries=1 --timeout=3 http://127.0.0.1:8080/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
 
 networks:
   bridge-internal:
@@ -192,7 +256,7 @@ x-casaos:
   author: kriz_cold
   developer: kriz_cold
   category: Entertainment
-  icon: https://cdn.jsdelivr.net/gh/Yundera/AppStore@main/Apps/stremio-torrent-bridge/icon.png
+  icon: https://cdn.jsdelivr.net/gh/krizcold/stremio-torrent-bridge@main/assets/icon.png
   title:
     en_us: "Stremio Torrent Bridge"
   tagline:

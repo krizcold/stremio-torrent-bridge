@@ -1,7 +1,9 @@
 package httpclient
 
 import (
+	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -47,4 +49,31 @@ func NewStreaming() *http.Client {
 			},
 		},
 	}
+}
+
+// NewProxied creates an API client that routes requests through the given
+// proxy URL. Supports http://, https://, and socks5:// schemes natively via
+// Go's http.ProxyURL. Returns an error if proxyURL is empty or unparseable.
+func NewProxied(proxyURL string) (*http.Client, error) {
+	if proxyURL == "" {
+		return nil, fmt.Errorf("proxy URL is empty")
+	}
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse proxy URL: %w", err)
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return nil, fmt.Errorf("proxy URL missing scheme or host: %q", proxyURL)
+	}
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &uaTransport{
+			base: &http.Transport{
+				Proxy:               http.ProxyURL(parsed),
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
+	}, nil
 }

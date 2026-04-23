@@ -13,6 +13,10 @@ import (
 	"github.com/krizcold/stremio-torrent-bridge/pkg/httpclient"
 )
 
+// rqbitStatsDecodeErrOnce limits stats-decode warnings to a single line across
+// the adapter's lifetime so a schema drift doesn't flood logs on every poll.
+var rqbitStatsDecodeErrOnce sync.Once
+
 // RqbitAdapter implements Engine for rqbit (github.com/ikatson/rqbit)
 type RqbitAdapter struct {
 	baseURL      string
@@ -82,6 +86,47 @@ type rqbitFileInfo struct {
 	Name     string `json:"name"`
 	Length   int64  `json:"length"`
 	Included bool   `json:"included"`
+}
+
+// rqbitStats mirrors the relevant subset of rqbit's TorrentStats JSON.
+// See rqbit source: crates/librqbit/src/torrent_state/stats.rs
+type rqbitStats struct {
+	State string          `json:"state"` // "initializing" | "live" | "paused" | "error"
+	Live  *rqbitLiveStats `json:"live"`  // null when torrent is paused/initializing/errored
+}
+
+// rqbitLiveStats holds the runtime stats only present while a torrent is live.
+type rqbitLiveStats struct {
+	Snapshot      rqbitStatsSnapshot `json:"snapshot"`
+	DownloadSpeed rqbitSpeed         `json:"download_speed"`
+	UploadSpeed   rqbitSpeed         `json:"upload_speed"`
+}
+
+// rqbitStatsSnapshot embeds the peer-counter aggregation we care about.
+type rqbitStatsSnapshot struct {
+	PeerStats rqbitPeerStats `json:"peer_stats"`
+}
+
+// rqbitPeerStats is rqbit's AggregatePeerStats. `live` is the current active
+// peer count; `seen` is the cumulative count of peers ever observed.
+type rqbitPeerStats struct {
+	Queued     int `json:"queued"`
+	Connecting int `json:"connecting"`
+	Live       int `json:"live"`
+	Seen       int `json:"seen"`
+	Dead       int `json:"dead"`
+	NotNeeded  int `json:"not_needed"`
+}
+
+// rqbitSpeed is rqbit's Speed struct. Despite the `mbps` name, the value is
+// mebibytes per second (MiB/s) -- rqbit's as_bytes() multiplies by 1024*1024.
+type rqbitSpeed struct {
+	Mbps float64 `json:"mbps"`
+}
+
+// bytesPerSec converts rqbit's MiB/s value to bytes/sec for TorrentStats.
+func (s rqbitSpeed) bytesPerSec() float64 {
+	return s.Mbps * 1024 * 1024
 }
 
 // rqbitListResponse handles both array and object response formats.
@@ -478,7 +523,36 @@ func (r *RqbitAdapter) getTorrentByID(ctx context.Context, id int, knownHash str
 		Files:     files,
 		EngineID:  strconv.Itoa(id),
 		TotalSize: totalSize,
+		Stats:     parseRqbitStats(detail.Stats),
 	}, nil
+}
+
+// parseStats decodes the Stats raw JSON from a rqbitTorrentDetail into a
+// *TorrentStats. Returns nil when the torrent has no live stats (paused,
+// initializing, errored) or when decode fails (schema drift is logged once).
+func parseRqbitStats(raw json.RawMessage) *TorrentStats {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var s rqbitStats
+	if err := json.Unmarshal(raw, &s); err != nil {
+		rqbitStatsDecodeErrOnce.Do(func() {
+			fmt.Printf("rqbit: stats decode failed (schema drift?): %v\n", err)
+		})
+		return nil
+	}
+	if s.Live == nil {
+		return nil
+	}
+	ps := s.Live.Snapshot.PeerStats
+	// rqbit doesn't split seeders from leechers; leave ConnectedSeeders at 0.
+	return &TorrentStats{
+		DownloadSpeed:    s.Live.DownloadSpeed.bytesPerSec(),
+		UploadSpeed:      s.Live.UploadSpeed.bytesPerSec(),
+		ActivePeers:      ps.Live,
+		TotalPeers:       ps.Seen,
+		ConnectedSeeders: 0,
+	}
 }
 
 // torrentDetailsToInfoSlice converts a slice of rqbitTorrentDetail to []TorrentInfo
@@ -517,6 +591,7 @@ func (r *RqbitAdapter) torrentDetailsToInfoSlice(details []rqbitTorrentDetail) [
 			Files:     files,
 			EngineID:  engineID,
 			TotalSize: totalSize,
+			Stats:     parseRqbitStats(d.Stats),
 		})
 	}
 	return result

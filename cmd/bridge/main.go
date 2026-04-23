@@ -21,19 +21,19 @@ func main() {
 	cfg := config.Load()
 	cfg.LogSummary()
 
-	// 2. Create the torrent engine adapter based on configuration.
-	var eng engine.Engine
-	switch cfg.DefaultEngine {
-	case "torrserver":
-		eng = engine.NewTorrServerAdapter(cfg.TorrServerURL, cfg.TorrServerUsername, cfg.TorrServerPassword)
-	case "rqbit":
-		eng = engine.NewRqbitAdapter(cfg.RqbitURL, cfg.RqbitUsername, cfg.RqbitPassword)
-	case "qbittorrent":
-		eng = engine.NewQBittorrentAdapter(cfg.QBittorrentURL, cfg.QBitDownloadPath, cfg.QBitUsername, cfg.QBitPassword)
-	default:
-		eng = engine.NewTorrServerAdapter(cfg.TorrServerURL, cfg.TorrServerUsername, cfg.TorrServerPassword)
+	// 2. Create all engine adapters and build the runtime-switchable multi-engine.
+	torrserverAdapter := engine.NewTorrServerAdapter(cfg.TorrServerURL, cfg.TorrServerUsername, cfg.TorrServerPassword)
+	rqbitAdapter := engine.NewRqbitAdapter(cfg.RqbitURL, cfg.RqbitUsername, cfg.RqbitPassword)
+	qbitAdapter := engine.NewQBittorrentAdapter(cfg.QBittorrentURL, cfg.QBitDownloadPath, cfg.QBitUsername, cfg.QBitPassword)
+
+	multi := engine.NewMultiEngine(torrserverAdapter, rqbitAdapter, qbitAdapter)
+	if err := multi.SetActive(cfg.DefaultEngine); err != nil {
+		fmt.Printf("Unknown engine %q, falling back to torrserver\n", cfg.DefaultEngine)
+		_ = multi.SetActive("torrserver")
+		cfg.DefaultEngine = "torrserver"
 	}
-	fmt.Printf("Using engine: %s\n", eng.Name())
+	var eng engine.Engine = multi
+	fmt.Printf("Using engine: %s\n", multi.GetActive())
 
 	// 2b. Create the cache manager for LRU cleanup.
 	cacheManager := cache.NewCacheManager(eng, cfg)
@@ -55,7 +55,7 @@ func main() {
 	streamProxy := proxy.NewStreamProxy(eng, cacheManager)
 
 	// 6. Create the management REST API handlers.
-	handlers := api.NewHandlers(store, cfg, eng, cacheManager, wrapper, relayServer)
+	handlers := api.NewHandlers(store, cfg, eng, multi, cacheManager, wrapper, relayServer)
 
 	// 7. Create the go-stremio addon with manifest and placeholder stream handlers.
 	//    The placeholder handlers return NotFound because the real stream handling
@@ -67,8 +67,11 @@ func main() {
 		Name:        "Torrent Bridge",
 		Description: "Wraps Stremio addons for full TCP/UDP peer connectivity",
 		Version:     "0.1.0",
-		Types:       []string{"movie", "series"},
-		Catalogs:    []stremio.CatalogItem{},
+		// Logo is Stremio's canonical display image for an addon; the
+		// Manifest struct has no Icon field.
+		Logo:     "https://cdn.jsdelivr.net/gh/krizcold/stremio-torrent-bridge@main/assets/icon.png",
+		Types:    []string{"movie", "series"},
+		Catalogs: []stremio.CatalogItem{},
 		ResourceItems: []stremio.ResourceItem{
 			{
 				Name:  "stream",
