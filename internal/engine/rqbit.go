@@ -440,7 +440,12 @@ func (r *RqbitAdapter) ListTorrents(ctx context.Context) ([]TorrentInfo, error) 
 }
 
 func (r *RqbitAdapter) Ping(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+"/stats", nil)
+	// Hit the root: it exists on all rqbit versions and (unlike /stats) is
+	// cheap. We treat any HTTP response as "alive" — 401/403 still mean the
+	// server is running; auth mismatches surface as errors on real operations.
+	// Only real network-level failures (refused, timeout, DNS) should mark
+	// the engine offline.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+"/", nil)
 	if err != nil {
 		return fmt.Errorf("rqbit ping: create request: %w", err)
 	}
@@ -448,14 +453,15 @@ func (r *RqbitAdapter) Ping(ctx context.Context) error {
 
 	resp, err := r.client.Do(req)
 	if err != nil {
+		fmt.Printf("rqbit ping: %s unreachable: %v\n", r.baseURL, err)
 		return fmt.Errorf("rqbit ping: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode >= 500 {
+		fmt.Printf("rqbit ping: %s returned %d\n", r.baseURL, resp.StatusCode)
 		return fmt.Errorf("rqbit ping: unexpected status %d", resp.StatusCode)
 	}
-
 	return nil
 }
 
