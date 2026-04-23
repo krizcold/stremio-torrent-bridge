@@ -39,7 +39,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Track unsaved changes in all settings inputs
-    document.getElementById('engine-select').addEventListener('change', checkUnsavedChanges);
     document.getElementById('proxy-url').addEventListener('input', checkUnsavedChanges);
     document.getElementById('cache-size').addEventListener('input', checkUnsavedChanges);
     document.getElementById('cache-age').addEventListener('input', checkUnsavedChanges);
@@ -234,6 +233,42 @@ async function processRelayRequest(request) {
 // Config & Engine Status
 // ---------------------------------------------------------------------------
 
+// Display-name overrides for the three engines. The API returns lowercase
+// identifiers; this map renders them with the casing each project actually uses.
+const engineDisplayNames = {
+    torrserver: 'TorrServer',
+    rqbit: 'rqbit',
+    qbittorrent: 'qBittorrent',
+};
+
+// Short tradeoff descriptions shown in the (i) tooltip on each engine card.
+const engineTooltips = {
+    torrserver: 'Balanced default. Medium memory (~200MB), fast streaming, proven on PCS. Best if you\'re unsure which to pick.',
+    rqbit: 'Lowest memory footprint (~50MB). Fewer peers than qBittorrent, no MSE encryption. Good for small servers.',
+    qbittorrent: 'Max peer connectivity and ISP-bypass via MSE encryption. Highest memory use (~500MB+). Best for max download speed.',
+};
+
+// Switch the active engine. PUTs only the defaultEngine field to /api/config,
+// which calls MultiEngine.SetActive on the backend and persists the choice.
+async function activateEngine(engine) {
+    try {
+        const response = await fetch('/api/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ defaultEngine: engine }),
+        });
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+        // Refresh the engine status to reflect the new active engine.
+        loadConfig();
+    } catch (error) {
+        console.error('Failed to switch engine:', error);
+        alert(`Failed to switch engine: ${error.message}`);
+    }
+}
+
 // Load configuration from API
 async function loadConfig() {
     try {
@@ -243,7 +278,6 @@ async function loadConfig() {
         const config = await response.json();
 
         // Populate form fields
-        document.getElementById('engine-select').value = config.defaultEngine || 'torrserver';
         document.getElementById('fetch-method-select').value = config.defaultFetchMethod || 'direct';
         document.getElementById('proxy-url').value = config.proxyURL || '';
         document.getElementById('cache-size').value = config.cacheSizeGB || 50;
@@ -255,7 +289,6 @@ async function loadConfig() {
 
         // Store saved config for unsaved changes detection
         savedConfig = {
-            defaultEngine: config.defaultEngine || 'torrserver',
             defaultFetchMethod: config.defaultFetchMethod || 'direct',
             proxyURL: config.proxyURL || '',
             cacheSizeGB: config.cacheSizeGB || 50,
@@ -263,7 +296,7 @@ async function loadConfig() {
         };
         checkUnsavedChanges();
 
-        // Show engine status
+        // Show engine status with inline "Make Active" buttons + info tooltips
         const statusEl = document.getElementById('engine-status');
         if (config.engines && Object.keys(config.engines).length > 0) {
             let statusHTML = '<div class="engine-grid">';
@@ -273,14 +306,23 @@ async function loadConfig() {
                 const badgeClass = isOnline ? 'badge-online' : (info.status === 'offline' ? 'badge-offline' : 'badge-unknown');
                 const badgeText = isOnline ? 'Online' : (info.status === 'offline' ? 'Offline' : 'Unknown');
                 const activeClass = isActive ? 'engine-active' : '';
+                const displayName = engineDisplayNames[engine] || engine;
+                const tooltip = engineTooltips[engine] || '';
+                const buttonDisabled = isActive || !isOnline;
+                const buttonLabel = isActive ? 'Active' : 'Make Active';
 
                 statusHTML += `<div class="engine-row ${activeClass}">
                     <div class="engine-info">
-                        <strong>${escapeHtml(engine)}</strong>
+                        <strong>${escapeHtml(displayName)}</strong>
+                        <span class="info-tooltip" tabindex="0" aria-label="About ${escapeHtml(displayName)}">
+                            <span class="info-icon">i</span>
+                            <span class="info-bubble">${escapeHtml(tooltip)}</span>
+                        </span>
                         ${isActive ? '<span class="active-label">active</span>' : ''}
                     </div>
                     <div class="engine-url">${escapeHtml(info.url || 'Not configured')}</div>
                     <span class="status-badge ${badgeClass}">${badgeText}</span>
+                    <button class="small engine-activate-btn" ${buttonDisabled ? 'disabled' : ''} onclick="activateEngine('${escapeHtml(engine)}')">${buttonLabel}</button>
                 </div>`;
             }
             statusHTML += '</div>';
@@ -301,7 +343,6 @@ async function saveConfig() {
     const statusEl = document.getElementById('config-status');
 
     const config = {
-        defaultEngine: document.getElementById('engine-select').value,
         defaultFetchMethod: document.getElementById('fetch-method-select').value,
         proxyURL: document.getElementById('proxy-url').value.trim(),
         cacheSizeGB: parseInt(document.getElementById('cache-size').value, 10),
@@ -347,7 +388,6 @@ async function saveConfig() {
 
         // Update saved config reference immediately to prevent flash
         savedConfig = {
-            defaultEngine: config.defaultEngine,
             defaultFetchMethod: config.defaultFetchMethod,
             proxyURL: config.proxyURL,
             cacheSizeGB: config.cacheSizeGB,
@@ -380,7 +420,6 @@ function checkUnsavedChanges() {
     if (!indicator || !savedConfig) return;
 
     const current = {
-        defaultEngine: document.getElementById('engine-select').value,
         defaultFetchMethod: document.getElementById('fetch-method-select').value,
         proxyURL: document.getElementById('proxy-url').value.trim(),
         cacheSizeGB: parseInt(document.getElementById('cache-size').value, 10) || 0,
@@ -388,7 +427,6 @@ function checkUnsavedChanges() {
     };
 
     const hasChanges =
-        current.defaultEngine !== savedConfig.defaultEngine ||
         current.defaultFetchMethod !== savedConfig.defaultFetchMethod ||
         current.proxyURL !== savedConfig.proxyURL ||
         current.cacheSizeGB !== savedConfig.cacheSizeGB ||

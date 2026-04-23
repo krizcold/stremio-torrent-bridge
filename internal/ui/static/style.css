@@ -214,6 +214,89 @@ button.small {
     min-width: 140px;
 }
 
+.engine-activate-btn {
+    flex-shrink: 0;
+    min-width: 96px;
+}
+
+.engine-activate-btn:disabled {
+    /* Active engine: use the accent teal so it reads as a state badge, not a "disabled" button. */
+    background: rgba(78, 201, 176, 0.15);
+    border-color: rgba(78, 201, 176, 0.6);
+    color: #4ec9b0;
+    opacity: 1;
+    cursor: default;
+}
+
+/* Info tooltip: small (i) icon revealing a description on hover/focus. */
+.info-tooltip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: help;
+}
+
+.info-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #1a4d7a;
+    color: #eee;
+    font-size: 0.7rem;
+    font-weight: 600;
+    font-style: italic;
+    font-family: Georgia, serif;
+    line-height: 1;
+    transition: background-color 0.2s;
+}
+
+.info-tooltip:hover .info-icon,
+.info-tooltip:focus .info-icon {
+    background: #2b6ea8;
+}
+
+.info-bubble {
+    position: absolute;
+    left: 24px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 10;
+    min-width: 240px;
+    max-width: 320px;
+    padding: 10px 12px;
+    background: #0a1930;
+    border: 1px solid #2b6ea8;
+    border-radius: 6px;
+    color: #eee;
+    font-size: 0.8rem;
+    font-weight: normal;
+    line-height: 1.45;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.15s, visibility 0.15s;
+    pointer-events: none;
+}
+
+.info-tooltip:hover .info-bubble,
+.info-tooltip:focus .info-bubble {
+    opacity: 1;
+    visibility: visible;
+}
+
+@media (max-width: 640px) {
+    .info-bubble {
+        left: auto;
+        right: 0;
+        top: 24px;
+        transform: none;
+    }
+}
+
 .active-label {
     font-size: 0.7rem;
     text-transform: uppercase;

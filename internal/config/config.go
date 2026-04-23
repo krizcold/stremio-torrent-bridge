@@ -17,8 +17,10 @@ type Config struct {
 	Port        int    // env: PORT, default: 8080
 	ExternalURL string // env: BRIDGE_EXTERNAL_URL, default: "" (will fallback to Host header)
 
-	// Engine selection
-	DefaultEngine string // env: TORRENT_ENGINE, default: "torrserver"
+	// Engine selection. User-settable from the UI; persisted in /data/config.json.
+	// Not driven by env vars — first-boot default is set in Load() and any
+	// subsequent change via PUT /api/config becomes the new persisted value.
+	DefaultEngine string
 
 	// Engine URLs
 	TorrServerURL      string // env: TORRSERVER_URL, default: "http://torrserver:8090"
@@ -97,9 +99,6 @@ func Load() *Config {
 	}
 	if v := os.Getenv("BRIDGE_EXTERNAL_URL"); v != "" {
 		c.ExternalURL = v
-	}
-	if v := os.Getenv("TORRENT_ENGINE"); v != "" {
-		c.DefaultEngine = v
 	}
 	if v := os.Getenv("TORRSERVER_URL"); v != "" {
 		c.TorrServerURL = v

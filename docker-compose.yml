@@ -57,7 +57,6 @@ services:
       - "rqbit:host-gateway"
       - "qbittorrent:host-gateway"
     environment:
-      TORRENT_ENGINE: "${TORRENT_ENGINE:-qbittorrent}"
       BRIDGE_EXTERNAL_URL: "https://stremiotorrentbridge-${APP_DOMAIN}"
       TORRSERVER_URL: "http://torrserver:8090"
       TORRSERVER_USERNAME: "bridge"
@@ -88,9 +87,6 @@ services:
           memory: 256M
     x-casaos:
       envs:
-        - container: TORRENT_ENGINE
-          description:
-            en_us: "Torrent engine to use: torrserver, rqbit, or qbittorrent"
         - container: CACHE_SIZE_GB
           description:
             en_us: "Maximum cache size in gigabytes"
@@ -152,15 +148,20 @@ services:
     restart: unless-stopped
     cpu_shares: 50
     network_mode: host
-    command: server start --listen-port 4240 /downloads
+    # Use the image's default CMD (server start /home/rqbit/downloads). The v9
+    # image declares VOLUME /home/rqbit/{cache,db,downloads} and sets
+    # RQBIT_HTTP_API_LISTEN_ADDR=0.0.0.0:3030 / RQBIT_LISTEN_PORT=4240 as image
+    # ENV defaults — env vars below override only for clarity.
     environment:
       RQBIT_HTTP_BASIC_AUTH_USERPASS: "bridge:$APP_DEFAULT_PASSWORD"
       RQBIT_HTTP_API_LISTEN_ADDR: "0.0.0.0:3030"
+      RQBIT_LISTEN_PORT: "4240"
       # Mirrored for the healthcheck below — rqbit itself ignores this var
       RQBIT_HEALTHCHECK_PASSWORD: "$APP_DEFAULT_PASSWORD"
     volumes:
-      - /DATA/AppData/stremiotorrentbridge/rqbit/downloads:/downloads
-      - /DATA/AppData/stremiotorrentbridge/rqbit/config:/root/.config/rqbit
+      - /DATA/AppData/stremiotorrentbridge/rqbit/downloads/:/home/rqbit/downloads/
+      - /DATA/AppData/stremiotorrentbridge/rqbit/cache/:/home/rqbit/cache/
+      - /DATA/AppData/stremiotorrentbridge/rqbit/db/:/home/rqbit/db/
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- --tries=1 --timeout=3 --user=bridge --password=$$RQBIT_HEALTHCHECK_PASSWORD http://127.0.0.1:3030/ || exit 1"]
       interval: 15s
@@ -276,8 +277,9 @@ x-casaos:
       - Automatic LRU cache management
       - Management UI for addon configuration
 
-      Default engine: qBittorrent
-      Change via TORRENT_ENGINE environment variable on the "bridge" service.
+      All three engines run simultaneously. Pick the active one from the Bridge
+      UI's Engine Status panel at any time — the choice is saved and persists
+      across restarts.
     fr_fr: |
       Stremio Torrent Bridge enveloppe les addons Stremio (comme Torrentio) pour
       offrir un streaming torrent amélioré avec une connectivité complète TCP/UDP,
@@ -303,10 +305,10 @@ x-casaos:
         3. Copy the wrapped URL and install it in Stremio
         4. Keep the Bridge UI tab open for Cloudflare-protected addons (Tab Relay)
 
-        **Torrent Engine** (change via TORRENT_ENGINE on "bridge" service):
-        - `qbittorrent` (default) - Maximum download speed
-        - `torrserver` - Easy setup, IPv6 support
-        - `rqbit` - Low memory usage
+        **Torrent Engine** (switchable from the Bridge UI > Engine Status panel):
+        - `torrserver` - Balanced default. Medium memory, fast streaming, proven
+        - `qbittorrent` - Max peer connectivity + MSE encryption (ISP bypass). Higher memory
+        - `rqbit` - Lightest memory footprint. Fewer peers than qBittorrent
 
         **Peer Ports** (exposed via host networking):
         - TorrServer: `42069` (TCP/UDP)
