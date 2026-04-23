@@ -28,9 +28,9 @@ func main() {
 
 	multi := engine.NewMultiEngine(torrserverAdapter, rqbitAdapter, qbitAdapter)
 	if err := multi.SetActive(cfg.DefaultEngine); err != nil {
-		fmt.Printf("Unknown engine %q, falling back to torrserver\n", cfg.DefaultEngine)
-		_ = multi.SetActive("torrserver")
-		cfg.DefaultEngine = "torrserver"
+		fmt.Printf("Unknown engine %q, falling back to qbittorrent\n", cfg.DefaultEngine)
+		_ = multi.SetActive("qbittorrent")
+		cfg.DefaultEngine = "qbittorrent"
 	}
 	var eng engine.Engine = multi
 	fmt.Printf("Using engine: %s\n", multi.GetActive())

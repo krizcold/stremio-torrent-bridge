@@ -65,8 +65,10 @@ func Load() *Config {
 		Port:        8080,
 		ExternalURL: "",
 
-		// Engine selection defaults
-		DefaultEngine: "torrserver",
+		// Engine selection defaults. User can change via the UI; the choice is
+		// then persisted in /data/config.json. qBittorrent gives the best peer
+		// connectivity (libtorrent + MSE) so it's the sensible first-boot pick.
+		DefaultEngine: "qbittorrent",
 
 		// Engine URL defaults
 		TorrServerURL:    "http://torrserver:8090",
@@ -76,8 +78,11 @@ func Load() *Config {
 		QBitUsername:     "admin",
 		QBitPassword:     "adminadmin",
 
-		// Fetch proxy defaults
-		DefaultFetchMethod: "tab_relay",
+		// Fetch proxy defaults. "direct" is the right default — most addons work
+		// from the server IP and don't need the Tab Relay (which requires the UI
+		// tab to stay open and adds latency). Users switch per-addon to tab_relay
+		// only when a specific addon is Cloudflare-blocked (e.g., Torrentio).
+		DefaultFetchMethod: "direct",
 		ProxyURL:           "",
 
 		// Cache defaults
