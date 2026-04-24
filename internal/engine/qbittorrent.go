@@ -248,17 +248,29 @@ func (q *QBittorrentAdapter) AddTorrent(ctx context.Context, magnetURI string) (
 func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fileIndex int, req *http.Request) (*StreamResponse, error) {
 	hash := strings.ToLower(infoHash)
 
-	// Add the torrent to qBittorrent now that the user has clicked play.
-	// PreloadTorrent only cached the magnet URI without adding anything,
-	// so this is the first time qBittorrent sees this torrent.
+	// Look up the cached magnet from PreloadTorrent. We do NOT delete it on
+	// consume: refreshes and replays after the torrent leaves qBit (via
+	// removeOtherTorrents, container recreation, etc.) need to be able to
+	// re-add it without waiting for the user to browse the stream list again.
 	q.mu.Lock()
 	magnetURI := q.magnets[hash]
-	delete(q.magnets, hash) // consumed
 	q.mu.Unlock()
 
-	if magnetURI != "" {
+	// If we have no cached magnet, try to resume an existing torrent first (it
+	// may already be in qBit from a previous session). If that misses too, fall
+	// back to a bare hash-only magnet — qBit's DHT will find peers. Trackers
+	// aren't required; they only speed up peer discovery when they happen to
+	// know about the torrent.
+	addMagnet := magnetURI
+	if addMagnet == "" {
+		q.resumeTorrent(ctx, hash)
+		if existing, _ := q.GetTorrent(ctx, hash); existing == nil {
+			addMagnet = "magnet:?xt=urn:btih:" + hash
+		}
+	}
+	if addMagnet != "" {
 		form := url.Values{}
-		form.Set("urls", magnetURI)
+		form.Set("urls", addMagnet)
 		form.Set("sequentialDownload", "true")
 		form.Set("firstLastPiecePrio", "true")
 		form.Set("savepath", q.downloadPath)
@@ -267,10 +279,6 @@ func (q *QBittorrentAdapter) StreamFile(ctx context.Context, infoHash string, fi
 			return nil, fmt.Errorf("qbittorrent stream: add torrent: %w", err)
 		}
 		resp.Body.Close()
-	} else {
-		// No cached magnet — torrent may already exist from a previous session
-		// or AddTorrent call. Try to resume it in case it was paused.
-		q.resumeTorrent(ctx, hash)
 	}
 
 	// Remove all other torrents to free bandwidth and disk resources.
