@@ -132,6 +132,13 @@ func (sp *StreamProxy) HandleStream(c *fiber.Ctx) {
 		}
 	}
 
+	// Defensive: if no engine supplied a Content-Type in Header, fall back to
+	// the StreamResponse.ContentType field. Without this, fasthttp defaults to
+	// text/plain for raw byte streams and video players refuse to play.
+	if resp.ContentType != "" && resp.Header.Get("Content-Type") == "" {
+		c.Set("Content-Type", resp.ContentType)
+	}
+
 	// Stream the body with zero buffering. SetBodyStream hands the reader
 	// directly to fasthttp which reads from it in chunks as the client
 	// consumes data. fasthttp will close the reader when streaming completes

@@ -441,6 +441,7 @@ func (q *QBittorrentAdapter) buildStreamResponse(f *os.File, par *pieceAwareRead
 			Header: http.Header{
 				"Accept-Ranges":  {"bytes"},
 				"Content-Length": {strconv.FormatInt(totalSize, 10)},
+				"Content-Type":   {contentType},
 			},
 		}, nil
 	}
@@ -479,6 +480,7 @@ func (q *QBittorrentAdapter) buildStreamResponse(f *os.File, par *pieceAwareRead
 			"Accept-Ranges":  {"bytes"},
 			"Content-Range":  {fmt.Sprintf("bytes %d-%d/%d", start, end, totalSize)},
 			"Content-Length": {strconv.FormatInt(contentLength, 10)},
+			"Content-Type":   {contentType},
 		},
 	}, nil
 }
