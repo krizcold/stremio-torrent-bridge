@@ -752,11 +752,13 @@ func (r *pieceAwareReader) waitForPiece(pieceIdx int) error {
 }
 
 func (r *pieceAwareReader) Close() error {
-	// Pause the torrent when the stream ends (user stopped watching / closed tab).
-	// This prevents abandoned downloads from consuming bandwidth indefinitely.
-	// The data stays on disk — if the user plays again, StreamFile resumes it.
-	// Use a detached context since the request context is likely already cancelled.
-	r.q.pauseTorrent(context.Background(), r.hash)
+	// No auto-pause on close: when a browser refreshes a stream tab, Close on
+	// the old reader runs concurrently with StreamFile opening the new one. If
+	// the pause lands after the new request's resume (or after focusFile), the
+	// torrent ends up paused — peers stay connected but no pieces flow, and
+	// stremio-server's opensubHash/codec probe times out with a 500, killing
+	// playback. Bandwidth savings here aren't worth the race; cache cleanup
+	// evicts unused torrents on its own hourly schedule.
 	return r.closer.Close()
 }
 
