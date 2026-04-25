@@ -1,11 +1,11 @@
 package main
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
-	"github.com/deflix-tv/go-stremio"
+	"github.com/gofiber/fiber"
 
 	"github.com/krizcold/stremio-torrent-bridge/internal/addon"
 	"github.com/krizcold/stremio-torrent-bridge/internal/api"
@@ -16,12 +16,34 @@ import (
 	"github.com/krizcold/stremio-torrent-bridge/internal/relay"
 )
 
+// fiberRouter adapts a *fiber.App to api.AddonRouter.
+type fiberRouter struct {
+	app *fiber.App
+}
+
+func (r *fiberRouter) AddEndpoint(method, path string, handler func(*fiber.Ctx)) {
+	switch method {
+	case "GET":
+		r.app.Get(path, handler)
+	case "POST":
+		r.app.Post(path, handler)
+	case "PUT":
+		r.app.Put(path, handler)
+	case "PATCH":
+		r.app.Patch(path, handler)
+	case "DELETE":
+		r.app.Delete(path, handler)
+	}
+}
+
+func (r *fiberRouter) AddMiddleware(path string, middleware func(*fiber.Ctx)) {
+	r.app.Use(path, middleware)
+}
+
 func main() {
-	// 1. Load configuration from environment variables with sensible defaults.
 	cfg := config.Load()
 	cfg.LogSummary()
 
-	// 2. Create all engine adapters and build the runtime-switchable multi-engine.
 	torrserverAdapter := engine.NewTorrServerAdapter(cfg.TorrServerURL, cfg.TorrServerUsername, cfg.TorrServerPassword)
 	rqbitAdapter := engine.NewRqbitAdapter(cfg.RqbitURL, cfg.RqbitUsername, cfg.RqbitPassword)
 	qbitAdapter := engine.NewQBittorrentAdapter(cfg.QBittorrentURL, cfg.QBitDownloadPath, cfg.QBitUsername, cfg.QBitPassword)
@@ -35,80 +57,75 @@ func main() {
 	var eng engine.Engine = multi
 	fmt.Printf("Using engine: %s\n", multi.GetActive())
 
-	// 2b. Create the cache manager for LRU cleanup.
 	cacheManager := cache.NewCacheManager(eng, cfg)
 
-	// 3. Create the addon store for persisting wrapped addon registrations.
 	store, err := addon.NewAddonStore(cfg.DataDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create addon store: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 4. Create the Browser Tab Relay server for proxying addon fetches
-	//    through a connected browser tab (residential IP).
 	relayServer := relay.NewServer()
-
-	// 5. Create the addon wrapper (manifest rewrite + stream interception)
-	//    and the stream proxy (video passthrough with Range support).
 	wrapper := addon.NewWrapper(store, cfg, eng, relayServer)
 	streamProxy := proxy.NewStreamProxy(eng, cacheManager)
-
-	// 6. Create the management REST API handlers.
 	handlers := api.NewHandlers(store, cfg, eng, multi, cacheManager, wrapper, relayServer)
 
-	// 7. Create the go-stremio addon with manifest and placeholder stream handlers.
-	//    The placeholder handlers return NotFound because the real stream handling
-	//    is done by the wrapper (for addon protocol) and stream proxy (for direct
-	//    HTTP streams). go-stremio requires at least one stream handler since our
-	//    manifest declares the "stream" resource.
-	manifest := stremio.Manifest{
-		ID:          "com.yundera.torrent-bridge",
-		Name:        "Torrent Bridge",
-		Description: "Wraps Stremio addons for full TCP/UDP peer connectivity",
-		Version:     "0.1.0",
-		// Logo is Stremio's canonical display image for an addon; the
-		// Manifest struct has no Icon field.
-		Logo:     "https://cdn.jsdelivr.net/gh/krizcold/stremio-torrent-bridge@main/assets/icon.png",
-		Types:    []string{"movie", "series"},
-		Catalogs: []stremio.CatalogItem{},
-		ResourceItems: []stremio.ResourceItem{
-			{
-				Name:  "stream",
-				Types: []string{"movie", "series"},
-			},
+	// We previously used go-stremio's NewAddon to build the Fiber app, but
+	// v0.6.0 hard-codes WriteTimeout: 9*time.Second on the underlying server,
+	// which severs any video stream that takes longer than 9s — i.e. all of
+	// them. Building Fiber ourselves with WriteTimeout: 0 lets long streams
+	// run to completion.
+	app := fiber.New(&fiber.Settings{
+		DisableStartupMessage: true,
+		BodyLimit:             0,
+		ReadTimeout:           0,
+		WriteTimeout:          0,
+		IdleTimeout:           0,
+	})
+
+	app.Use(func(c *fiber.Ctx) {
+		c.Set("Access-Control-Allow-Origin", "*")
+		c.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		c.Set("Access-Control-Allow-Headers", "Content-Type, Range, If-Range, If-None-Match")
+		if c.Method() == "OPTIONS" {
+			c.Status(204)
+			return
+		}
+		c.Next()
+	})
+
+	bridgeManifest := map[string]interface{}{
+		"id":          "com.yundera.torrent-bridge",
+		"name":        "Torrent Bridge",
+		"description": "Wraps Stremio addons for full TCP/UDP peer connectivity",
+		"version":     "0.1.0",
+		"logo":        "https://cdn.jsdelivr.net/gh/krizcold/stremio-torrent-bridge@main/assets/icon.png",
+		"types":       []string{"movie", "series"},
+		"catalogs":    []interface{}{},
+		"resources": []map[string]interface{}{
+			{"name": "stream", "types": []string{"movie", "series"}},
 		},
 	}
-
-	placeholderStreamHandler := func(ctx context.Context, id string, userData interface{}) ([]stremio.StreamItem, error) {
-		return nil, stremio.NotFound
-	}
-
-	streamHandlers := map[string]stremio.StreamHandler{
-		"movie":  placeholderStreamHandler,
-		"series": placeholderStreamHandler,
-	}
-
-	opts := stremio.Options{
-		BindAddr: cfg.BindAddr,
-		Port:     cfg.Port,
-	}
-
-	stremioAddon, err := stremio.NewAddon(manifest, nil, streamHandlers, opts)
+	manifestJSON, err := json.Marshal(bridgeManifest)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create stremio addon: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to marshal bridge manifest: %v\n", err)
 		os.Exit(1)
 	}
+	app.Get("/manifest.json", func(c *fiber.Ctx) {
+		c.Set("Content-Type", "application/json")
+		c.Send(manifestJSON)
+	})
 
-	// 8. Register all routes: management API, wrap endpoints, stream proxy, relay, and UI.
-	api.RegisterRoutes(stremioAddon, handlers, wrapper, streamProxy, relayServer)
+	router := &fiberRouter{app: app}
+	api.RegisterRoutes(router, handlers, wrapper, streamProxy, relayServer)
 
-	// 9. Start cache manager background cleanup.
 	cacheManager.Start()
 	defer cacheManager.Stop()
 
-	// 10. Start the server.
-	fmt.Printf("Torrent Bridge starting on %s:%d\n", cfg.BindAddr, cfg.Port)
-	stopChan := make(chan bool, 1)
-	stremioAddon.Run(stopChan)
+	listenAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.Port)
+	fmt.Printf("Torrent Bridge starting on %s\n", listenAddr)
+	if err := app.Listen(listenAddr); err != nil {
+		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+		os.Exit(1)
+	}
 }

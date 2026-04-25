@@ -2,10 +2,7 @@ module github.com/krizcold/stremio-torrent-bridge
 
 go 1.22
 
-require (
-	github.com/deflix-tv/go-stremio v0.6.0
-	github.com/gofiber/fiber v1.14.6
-)
+require github.com/gofiber/fiber v1.14.6
 
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
