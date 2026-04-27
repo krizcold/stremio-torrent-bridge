@@ -831,8 +831,10 @@ func (q *QBittorrentAdapter) focusFile(ctx context.Context, hash string, targetI
 	}
 }
 
-// removeOtherTorrents deletes all torrents except the one being streamed,
-// freeing bandwidth and disk space for the active stream.
+// removeOtherTorrents removes inactive torrents from qBit's tracking but keeps
+// their files on disk. When the user switches back to one, the cached magnet
+// re-adds it and qBit re-detects the existing files — playback resumes
+// instantly without re-download. Disk cleanup is the cache manager's job.
 func (q *QBittorrentAdapter) removeOtherTorrents(ctx context.Context, keepHash string) {
 	torrents, err := q.getTorrentInfo(ctx, "")
 	if err != nil {
@@ -840,7 +842,7 @@ func (q *QBittorrentAdapter) removeOtherTorrents(ctx context.Context, keepHash s
 	}
 	for _, t := range torrents {
 		if strings.ToLower(t.Hash) != keepHash {
-			_ = q.RemoveTorrent(ctx, t.Hash, true)
+			_ = q.RemoveTorrent(ctx, t.Hash, false)
 		}
 	}
 }
